@@ -360,3 +360,124 @@ def test_image_dialog_guards_existing_images(app, tmp_path):
     unknown = ImageDialog(None, drive_a)
     unknown.path.setText(str(stranger))
     assert not unknown.start.isEnabled() and not unknown.same_drive.isVisibleTo(unknown)
+
+
+class _FakeBox:
+    """Stands in for the modal QMessageBox shown after imaging; clicks its first button."""
+
+    class Icon:
+        Information = Warning = None
+
+    class ButtonRole:
+        AcceptRole = RejectRole = None
+
+    def __init__(self, *args):
+        self.buttons = []
+
+    def setWindowTitle(self, *a): pass
+    def setIcon(self, *a): pass
+    def setText(self, *a): pass
+    def setInformativeText(self, *a): pass
+
+    def addButton(self, text, role):
+        self.buttons.append(text)
+        return text
+
+    def exec(self):
+        return 0
+
+    def clickedButton(self):
+        return self.buttons[0]  # "Open the image"
+
+    def deleteLater(self):
+        pass
+
+
+def test_scan_then_image_then_open_the_image(app, images, tmp_path, monkeypatch):
+    """The app's own flow: scan a drive, image it with the same reader, open the image."""
+    import lifeboat.ui.main_window as mw
+    from lifeboat.device.image import ImageDevice
+    from lifeboat.device.simulated import FaultPlan, SimulatedFailingDevice
+
+    source = image_path("mbr_disk")
+    dev = SimulatedFailingDevice(ImageDevice(source), FaultPlan())
+    dev.info.kind = "disk"  # a physical drive as far as the app is concerned
+    output = tmp_path / "drive.img"
+
+    class FakeImageDialog:
+        DialogCode = mw.ImageDialog.DialogCode
+
+        def __init__(self, *args):
+            pass
+
+        def exec(self):
+            return self.DialogCode.Accepted
+
+        def values(self):
+            return {"output": str(output), "thoroughness": "standard", "same_drive": False}
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(mw, "ImageDialog", FakeImageDialog)
+    monkeypatch.setattr(mw, "QMessageBox", _FakeBox)
+    window = mw.MainWindow()
+    window._open = lambda info: dev if info.kind == "disk" else mw.MainWindow._open(window, info)
+    window.show()
+    window.select_source(dev.info)
+    window.quick_scan()
+    _wait(app, window)
+    files_on_drive = window.result.counts()[0]
+    assert files_on_drive > 0
+    window.create_image()
+    _wait(app, window, timeout=120)
+    _pump(app)
+    assert output.read_bytes() == source.read_bytes()
+    # "Open the image" was clicked: the image is now the source, without the drive.
+    assert window.info.kind == "image" and window.info.path == str(output)
+    window.quick_scan()
+    _wait(app, window)
+    assert window.result.counts()[0] == files_on_drive
+    window.close()
+
+
+def test_deep_scan_from_the_window(app, tmp_path, monkeypatch):
+    """A drive with no filesystem left: the deep scan finds a photo by its content."""
+    import lifeboat.ui.main_window as mw
+    from tests.test_carving import _jpeg
+
+    photo = _jpeg(7)
+    raw = tmp_path / "wiped.img"
+    raw.write_bytes(os.urandom(65536) + photo + bytes(-len(photo) % 512) + os.urandom(65536))
+
+    class FakeDeepDialog:
+        DialogCode = mw.DeepScanDialog.DialogCode
+
+        def __init__(self, *args):
+            pass
+
+        def exec(self):
+            return self.DialogCode.Accepted
+
+        def values(self):
+            return {"find_partitions": True, "carve": True, "groups": {"Photos", "Pictures", "Documents"}}
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(mw, "DeepScanDialog", FakeDeepDialog)
+    window = mw.MainWindow()
+    window.show()
+    info = DeviceInfo(path=str(raw), kind="image", size=raw.stat().st_size, model="Disk image")
+    window.images.append(info)
+    window.select_source(info)
+    window.quick_scan()
+    _wait(app, window)
+    assert window.result.counts()[0] == 0  # nothing left for a quick scan
+    window.deep_scan()
+    _wait(app, window, timeout=120)
+    assert window.result is not None and window.result.carved == 1
+    carved = [n for n in window.result.root.walk() if n.children is None]
+    assert len(carved) == 1 and carved[0].size == len(photo)
+    assert window.pages.currentIndex() == 2
+    window.close()
