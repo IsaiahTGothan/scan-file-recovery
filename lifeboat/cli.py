@@ -237,8 +237,8 @@ def cmd_image(args: argparse.Namespace) -> int:
     info, reader, bus = _open(args.source, args.sector_size)
     bus.subscribe(console.event)
     reader.control = control
-    job = ImagingJob(reader, info, ImagingOptions(args.output, thoroughness=args.thoroughness), bus, control,
-                     console.progress, CliInterventions(control, args.wait))
+    options = ImagingOptions(args.output, thoroughness=args.thoroughness, same_drive=args.same_drive)
+    job = ImagingJob(reader, info, options, bus, control, console.progress, CliInterventions(control, args.wait))
     summary = job.run()
     if console._line:
         sys.stderr.write("\n")
@@ -305,6 +305,8 @@ def build_parser() -> argparse.ArgumentParser:
     source_args(p)
     p.add_argument("output")
     p.add_argument("--thoroughness", choices=["quick", "standard", "maximum"], default="standard")
+    p.add_argument("--same-drive", action="store_true",
+                   help="continue an existing image although its map names another drive (same drive, other adapter)")
     p.set_defaults(func=cmd_image)
     return parser
 

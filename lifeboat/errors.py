@@ -150,6 +150,11 @@ E_DEST_NOT_WRITABLE = _register(
     "The destination folder is not writable",
     "Choose another folder or check its permissions.",
 )
+E_IMAGE_EXISTS = _register(
+    "LB-309",
+    "An image file with this name already exists",
+    "Lifeboat never overwrites it. Choose a new file name, or move the old file away first.",
+)
 
 # --- Per-file outcomes -------------------------------------------------------------
 E_FILE_PARTIAL = _register(

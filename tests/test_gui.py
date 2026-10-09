@@ -304,3 +304,37 @@ def test_recover_dialog_resume_survives_closing(app, tmp_path):
     assert values["resume"] is True
     assert values["job_folder"] is False  # resume in place, not in a new folder inside the old one
     assert values["destination"] == str(job)
+
+
+def test_image_dialog_guards_existing_images(app, tmp_path):
+    from lifeboat.device.image import MemoryDevice
+    from lifeboat.imaging import ImagingJob, ImagingOptions
+    from lifeboat.rescue.reader import ReadPolicy, RescueReader
+    from lifeboat.ui.dialogs import ImageDialog
+
+    data = bytes(range(256)) * 4096  # 1 MiB
+    drive_a = DeviceInfo(path=r"\\.\PhysicalDrive7", kind="disk", size=len(data), model="ST1000", serial="AAA111")
+    drive_b = DeviceInfo(path=r"\\.\PhysicalDrive7", kind="disk", size=len(data), model="ST1000", serial="BBB222")
+    out = tmp_path / "drive.img"
+    reader = RescueReader(MemoryDevice(data), ReadPolicy(timeout=1.0))
+    assert ImagingJob(reader, drive_a, ImagingOptions(str(out))).run().outcome == "success"
+
+    same = ImageDialog(None, drive_a)
+    same.path.setText(str(out))
+    assert same.start.isEnabled() and not same.same_drive.isVisibleTo(same)  # resumes its own image
+
+    other = ImageDialog(None, drive_b)
+    other.path.setText(str(out))
+    assert not other.start.isEnabled()  # another customer's drive: refused...
+    assert other.same_drive.isVisibleTo(other)
+    other.same_drive.setChecked(True)  # ...unless confirmed to be the same drive
+    assert other.start.isEnabled()
+    other.show()
+    other._accept()
+    assert other.values()["same_drive"] is True
+
+    stranger = tmp_path / "holiday.img"
+    stranger.write_bytes(b"x" * 4096)
+    unknown = ImageDialog(None, drive_a)
+    unknown.path.setText(str(stranger))
+    assert not unknown.start.isEnabled() and not unknown.same_drive.isVisibleTo(unknown)

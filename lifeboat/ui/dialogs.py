@@ -32,7 +32,7 @@ from ..branding import APP_FULL_NAME, PUBLISHER, PUBLISHER_URL, TAGLINE, owner_l
 from ..device.base import DeviceInfo
 from ..errors import E_DEST_SPACE
 from ..fs.carving import GROUPS
-from ..imaging import check_image_destination
+from ..imaging import check_image_destination, inspect_existing_image
 from ..logsetup import log_dir
 from ..recover import PreflightReport, RecoverySummary, Status, check_destination, find_resumable
 from ..util import format_duration, format_size
@@ -335,7 +335,8 @@ class ImageDialog(QDialog):
         self.path.setPlaceholderText("Where to save the image (.img)")
         last = str(setting("last_image_folder", ""))
         if last:
-            name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in source.display_name).strip() or "disk"
+            label = source.display_name + (f" {source.serial[-8:]}" if source.serial else "")
+            name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in label).strip() or "disk"
             self.path.setText(os.path.join(last, f"{name}.img"))
         browse = QPushButton(icons.icon("open"), "Browse\u2026")
         browse.clicked.connect(self._browse)
@@ -349,6 +350,11 @@ class ImageDialog(QDialog):
         form_layout.addWidget(need)
         self.checks = QVBoxLayout()
         form_layout.addLayout(self.checks)
+        self.same_drive = QCheckBox("It is this same drive (for example in another USB adapter): continue the image")
+        self.same_drive.setVisible(False)
+        self.same_drive.toggled.connect(self._validate)
+        form_layout.addWidget(self.same_drive)
+        self._other_drive = False
         layout.addWidget(form)
         self.thoroughness = _Thoroughness(str(setting("image_thoroughness", "standard")))
         layout.addWidget(self.thoroughness)
@@ -375,6 +381,9 @@ class ImageDialog(QDialog):
                 item.widget().deleteLater()
         path = self.path.text().strip()
         ok = bool(path) and os.path.isabs(path)
+        existing = inspect_existing_image(path, path + ".map", self.source, self.source.size) if ok else None
+        self._other_drive = existing is not None and existing.kind == "other-drive"
+        self.same_drive.setVisible(self._other_drive)
         if ok:
             problems = check_image_destination(path, self.source, self.source.size)
             for code, message in problems:
@@ -382,8 +391,14 @@ class ImageDialog(QDialog):
                 self.checks.addWidget(_issue_row("error" if blocking else "warning", f"{message}  [{code}]"))
                 if blocking:
                     ok = False
-            if os.path.exists(path + ".map"):
-                self.checks.addWidget(_issue_row("info", "A previous imaging session was found and will be resumed."))
+        if existing is not None and existing.kind != "new":
+            if existing.kind == "resume":
+                self.checks.addWidget(_issue_row("info", existing.message))
+            elif existing.kind == "restart" or (self._other_drive and self.same_drive.isChecked()):
+                self.checks.addWidget(_issue_row("warning", existing.message))
+            else:
+                self.checks.addWidget(_issue_row("error", f"{existing.message}  [LB-309]"))
+                ok = False
         self.start.setEnabled(ok)
 
     def _accept(self) -> None:
@@ -392,7 +407,8 @@ class ImageDialog(QDialog):
         self.accept()
 
     def values(self) -> dict:
-        return {"output": self.path.text().strip(), "thoroughness": self.thoroughness.value()}
+        return {"output": self.path.text().strip(), "thoroughness": self.thoroughness.value(),
+                "same_drive": self._other_drive and self.same_drive.isChecked()}
 
 
 class DeepScanDialog(QDialog):

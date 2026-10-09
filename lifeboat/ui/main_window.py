@@ -941,8 +941,9 @@ class MainWindow(QMainWindow):
         reader, info = self.reader, self.info
 
         def work(job: Job) -> ImagingSummary:
-            engine = ImagingJob(reader, info, ImagingOptions(values["output"], thoroughness=values["thoroughness"]),
-                                self.bus, job.control, job.report, job.handler)
+            options = ImagingOptions(values["output"], thoroughness=values["thoroughness"],
+                                     same_drive=values["same_drive"])
+            engine = ImagingJob(reader, info, options, self.bus, job.control, job.report, job.handler)
             job.engine = engine
             return engine.run()
 

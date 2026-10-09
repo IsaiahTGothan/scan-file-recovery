@@ -22,7 +22,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..device.base import DeviceInfo
-from ..errors import E_DEST_FAT32, E_DEST_FULL, E_DEST_GONE, E_DEST_ON_SOURCE, E_INTERNAL, Cancelled, LifeboatError
+from ..errors import (
+    E_DEST_FAT32,
+    E_DEST_FULL,
+    E_DEST_GONE,
+    E_DEST_ON_SOURCE,
+    E_IMAGE_EXISTS,
+    E_INTERNAL,
+    Cancelled,
+    LifeboatError,
+)
 from ..events import Choice, EventBus, Intervention, InterventionHandler, JobControl, Progress, RateMeter, Throttle
 from ..recover.destination import (
     disks_for_path,
@@ -36,7 +45,7 @@ from ..recover.destination import (
 )
 from ..recover.preflight import FAT32_LIMIT, FAT_NAMES
 from ..rescue.reader import MODE_LABELS, ReadMode, RescueReader
-from ..rescue.sectormap import SectorMap, State
+from ..rescue.sectormap import MapFileError, SectorMap, State, ascii_text
 from ..resilience import run_with_device_retry
 from ..util import format_size
 
@@ -56,9 +65,66 @@ class ImagingOptions:
     output: str
     mapfile: str = ""
     thoroughness: str = "standard"
+    # The user confirmed that an existing image whose map names another drive is of this
+    # drive after all (the same drive in a different USB adapter can report another serial).
+    same_drive: bool = False
 
     def map_path(self) -> str:
         return self.mapfile or self.output + ".map"
+
+
+@dataclass
+class ExistingImage:
+    """What is already at the image path.
+
+    ``kind`` is "new" (nothing there), "resume" (an unfinished image of this drive),
+    "restart" (a map without its image: the image is made from scratch), "other-drive"
+    (the map names a different drive of the same size) or "conflict" (something Lifeboat
+    must not touch).
+    """
+
+    kind: str
+    message: str = ""
+    rescued: int = 0
+
+    @property
+    def blocking(self) -> bool:
+        return self.kind in ("conflict", "other-drive")
+
+
+def inspect_existing_image(output: str, map_path: str, source: DeviceInfo, size: int) -> ExistingImage:
+    output_exists = os.path.exists(long_path(output))
+    map_exists = os.path.exists(long_path(map_path))
+    if not output_exists:
+        if map_exists:
+            return ExistingImage("restart", "A progress file (.map) was found, but not its image. The image is "
+                                            "made from scratch; the old progress file is kept as .map.old.")
+        return ExistingImage("new")
+    if not map_exists:
+        return ExistingImage("conflict", "A file with this name already exists and has no progress file (.map), "
+                                         "so Lifeboat cannot tell what it contains and will not overwrite it. "
+                                         "Choose a new file name.")
+    try:
+        previous = SectorMap.load(long_path(map_path))
+        image_size = os.path.getsize(long_path(output))
+    except (OSError, MapFileError) as exc:
+        return ExistingImage("conflict", f"The existing image's progress file cannot be read ({exc}). "
+                                         "Choose a new file name.")
+    if previous.extent != size or image_size > size:
+        return ExistingImage("conflict", f"The existing image is of a drive of a different size "
+                                         f"({format_size(max(previous.extent, image_size))}, this drive has "
+                                         f"{format_size(size)}). Choose a new file name.")
+    rescued = previous.totals()[State.GOOD]
+    if previous.source and previous.source != ascii_text(source.identity):
+        _kind, *parts = previous.source.split("|")
+        return ExistingImage("other-drive", f"The existing image was made from a different drive "
+                                            f"({' '.join(p for p in parts[:2] if p)}). Choose a new file name, or "
+                                            "confirm that it is this same drive (for example in another USB "
+                                            "adapter) to continue it.", rescued)
+    note = "" if previous.source else (" Its progress file does not say which drive it is from (it may come from "
+                                       "GNU ddrescue): make sure it is this drive.")
+    return ExistingImage("resume", f"An unfinished image of this drive was found ({format_size(rescued)} already "
+                                   f"copied). Imaging continues where it stopped.{note}", rescued)
 
 
 @dataclass
@@ -160,6 +226,10 @@ class ImagingJob:
         self._pass_count = 0
         self._phase = ""
         self._fh: Any = None
+        # What the image file holds. Not the reader's map: that records what was read from
+        # the drive by anyone (a scan, a preview...), which was never written to this image.
+        self.image = SectorMap(reader.size)
+        self._opened = False
 
     def finish_early(self) -> None:
         self._finish_early = True
@@ -168,7 +238,7 @@ class ImagingJob:
     def _report(self, position: int, force: bool = False) -> None:
         if not self._throttle.ready(force):
             return
-        totals = self.reader.map.totals()
+        totals = self.image.totals()
         good = totals[State.GOOD]
         rate = self._meter.update(self.reader.stats.bytes_ok)
         remaining = self.reader.size - good
@@ -181,6 +251,8 @@ class ImagingJob:
         ))
 
     def _save_map(self, force: bool = False, status: str = "?") -> None:
+        if not self._opened:
+            return  # never replace the map of an image this job did not open
         now = time.monotonic()
         if not force and now - self._saved < 30:
             return
@@ -189,7 +261,7 @@ class ImagingJob:
             if self._fh is not None:
                 self._fh.flush()  # type: ignore[attr-defined]
                 os.fsync(self._fh.fileno())  # type: ignore[attr-defined]
-            self.reader.map.save(long_path(self.options.map_path()), status)
+            self.image.save(long_path(self.options.map_path()), status)
         except OSError as exc:
             log.warning("Could not save the mapfile: %s", exc)
             if is_disk_full(exc) or is_gone(exc):
@@ -271,7 +343,7 @@ class ImagingJob:
                     self._fh.close()  # type: ignore[attr-defined]
                 except OSError:
                     pass
-            totals = self.reader.map.totals()
+            totals = self.image.totals()
             summary.good = totals[State.GOOD]
             summary.bad = totals[State.BAD] + totals[State.FAILED]
             summary.untried = totals[State.UNTRIED] + totals[State.SKIPPED]
@@ -291,19 +363,42 @@ class ImagingJob:
         opts = self.options
         make_dirs(os.path.dirname(os.path.abspath(opts.output)) or ".")
         map_path = opts.map_path()
-        if os.path.exists(long_path(map_path)):
+        existing = inspect_existing_image(opts.output, map_path, self.source, self.reader.size)
+        if existing.kind == "conflict" or (existing.kind == "other-drive" and not opts.same_drive):
+            raise ImagingError(existing.message, code=E_IMAGE_EXISTS)
+        image = SectorMap(self.reader.size)
+        if existing.kind in ("resume", "other-drive"):
             previous = SectorMap.load(long_path(map_path), self.reader.size)
             for start, end, state in previous.segments():
                 if state != State.UNTRIED:
+                    image.set(start, end, state)
+                    # Let the reader know too: it decides how each pass reads an area.
                     self.reader.map.upgrade(start, end, state)
-            self.events.info(
-                f"Resuming the image: {format_size(previous.totals()[State.GOOD])} were already rescued.")
+            image.current_pass = previous.current_pass
+            if existing.kind == "other-drive":
+                self.events.warning("Continuing an image whose progress file names another drive, as confirmed.")
+            self.events.info(f"Resuming the image: {format_size(existing.rescued)} were already rescued.")
+        elif existing.kind == "restart":
+            os.replace(long_path(map_path), long_path(map_path + ".old"))
+            self.events.warning(existing.message)
+        image.align(self.reader.sector_size)
+        image.source = self.source.identity
+        self.image = image
         exists = os.path.exists(long_path(opts.output))
         self._fh = open(long_path(opts.output), "r+b" if exists else "w+b")  # noqa: SIM115
         if not exists:
             _set_sparse(self._fh)
         self._fh.truncate(self.reader.size)  # type: ignore[attr-defined]
+        self._opened = True
         self.events.info(f"Imaging {self.source.title} ({format_size(self.reader.size)}) to {opts.output}")
+
+    def _record(self, start: int, end: int, outcome: object) -> None:
+        """Note in the image map what the image now holds for ``[start, end)``."""
+        for seg_start, seg_end, state in self.reader.map.segments(start, end):
+            # GOOD in the reader's map but not returned as good would mean nothing was written.
+            self.image.set(seg_start, seg_end, State.UNTRIED if state == State.GOOD else state)
+        for good_start, good_end in outcome.good:  # type: ignore[attr-defined]
+            self.image.set(good_start, good_end, State.GOOD)
 
     def _passes(self) -> None:
         passes = PASSES.get(self.options.thoroughness, PASSES["standard"])
@@ -319,7 +414,7 @@ class ImagingJob:
         for number, mode in enumerate(passes, start=1):
             if self._finish_early:
                 break
-            areas = self.reader.map.ranges(wanted[mode])
+            areas = self.image.ranges(wanted[mode])
             if not areas:
                 continue
             self._pass_index = number
@@ -338,8 +433,9 @@ class ImagingJob:
                     length = min(STEP, end - pos)
                     outcome = self._read(pos, length, mode)
                     self._write(outcome)
-                    self.reader.map.current_pos = pos
-                    self.reader.map.current_pass = number
+                    self._record(pos, pos + length, outcome)
+                    self.image.current_pos = pos
+                    self.image.current_pass = number
                     self._report(pos)
                     self._save_map()
             self._report(end if areas else 0, force=True)

@@ -46,6 +46,14 @@ _FROM_DDRESCUE = {
 }
 
 
+SOURCE_TAG = "# Lifeboat source: "
+
+
+def ascii_text(text: str) -> str:
+    """Mapfiles are ASCII: escape anything else (drive models can contain any character)."""
+    return " ".join(text.encode("ascii", "backslashreplace").decode("ascii").split())
+
+
 class MapFileError(ValueError):
     pass
 
@@ -63,6 +71,11 @@ class SectorMap:
         self.version = 0
         self.current_pos = 0
         self.current_pass = 1
+        # Which drive the map describes (DeviceInfo.identity), saved as a comment line that
+        # GNU ddrescue ignores; "" when unknown (e.g. a map made by ddrescue itself).
+        self.source = ""
+        # End of the last block in a loaded mapfile (the size of the drive it was made for).
+        self.extent = size
 
     # ------------------------------------------------------------------ helpers
     def _seg_end(self, index: int) -> int:
@@ -244,6 +257,7 @@ class SectorMap:
     def to_ddrescue(self, status: str = "?") -> str:
         lines = [
             "# Mapfile. Created by Lifeboat Data Recovery (GNU ddrescue compatible)",
+            *([f"{SOURCE_TAG}{ascii_text(self.source)}"] if self.source else []),
             f"# Current time: {time.strftime('%Y-%m-%d %H:%M:%S')}",
             "# current_pos  current_status  current_pass",
             f"0x{self.current_pos:08X}     {status}               {self.current_pass}",
@@ -278,8 +292,12 @@ class SectorMap:
         status_line_seen = False
         current_pos = 0
         current_pass = 1
+        source = ""
         for raw in text.splitlines():
             line = raw.strip()
+            if line.startswith(SOURCE_TAG):
+                source = line[len(SOURCE_TAG):].strip()
+                continue
             if not line or line.startswith("#"):
                 continue
             parts = line.split()
@@ -311,6 +329,8 @@ class SectorMap:
                 result.set(pos, pos + length, state)
         result.current_pos = current_pos
         result.current_pass = current_pass
+        result.source = source
+        result.extent = end
         return result
 
     @classmethod

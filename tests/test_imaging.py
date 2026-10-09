@@ -95,3 +95,103 @@ def test_recover_files_from_image_with_mapfile(images, tmp_path):
     assert is_complete(states)
     entry = next(e for e in manifest("ntfs") if e["path"] == "Photos/IMG_0002.JPG")
     assert sha256(data) == entry["sha256"]
+
+
+def _disk(serial: str, size: int) -> DeviceInfo:
+    return DeviceInfo(path=r"\\.\PhysicalDrive9", kind="disk", size=size, model="WDC WD10EZEX", serial=serial)
+
+
+def _image(device, info, out, **options):
+    reader = RescueReader(device, ReadPolicy(timeout=1.0, block_size=256 * 1024, unit=4096), events=EventBus())
+    return ImagingJob(reader, info, ImagingOptions(str(out), **options), events=EventBus()), reader
+
+
+def test_image_after_a_scan_contains_what_the_scan_read(images, tmp_path):
+    """The GUI scans first and then images with the same reader: the image must still be complete."""
+    source = image_path("mbr_disk")
+    device = ImageDevice(source)
+    reader = RescueReader(device, ReadPolicy(timeout=1.0), events=EventBus())
+    info = DeviceInfo(path=str(source), kind="image", size=device.size)
+    scanned = Scanner(reader, info).quick_scan()
+    assert reader.map.totals()[State.GOOD] > 0  # the scan read the partition table and file tables
+    out = tmp_path / "copy.img"
+    summary = ImagingJob(reader, info, ImagingOptions(str(out))).run()
+    assert summary.outcome == "success" and summary.percent == 100.0
+    assert sha256(out.read_bytes()) == sha256(source.read_bytes())
+    again = Scanner(RescueReader(ImageDevice(out), ReadPolicy(timeout=1.0)), info).quick_scan()
+    assert again.counts()[0] == scanned.counts()[0] > 0
+
+
+def test_map_without_its_image_starts_over(tmp_path):
+    data = os.urandom(4 * MiB)
+    info = _disk("SERIAL-A", len(data))
+    out = tmp_path / "disk.img"
+    job, _ = _image(MemoryDevice(data), info, out)
+    assert job.run().outcome == "success"
+    out.unlink()  # the image was moved away, its progress file stayed
+    job, _ = _image(MemoryDevice(data), info, out)
+    summary = job.run()
+    assert summary.outcome == "success"
+    assert out.read_bytes() == data
+    assert (tmp_path / "disk.img.map.old").exists()
+
+
+def test_image_of_another_drive_is_never_overwritten(tmp_path):
+    a, b = os.urandom(4 * MiB), os.urandom(4 * MiB)
+    out = tmp_path / "customer.img"
+    job, _ = _image(MemoryDevice(a), _disk("SERIAL-A", len(a)), out)
+    assert job.run().outcome == "success"
+    map_before = (tmp_path / "customer.img.map").read_text()
+    # A different drive of the same size and model, imaged to the same file name.
+    job, _ = _image(MemoryDevice(b), _disk("SERIAL-B", len(b)), out)
+    summary = job.run()
+    assert summary.outcome == "failed" and "different drive" in summary.error
+    assert out.read_bytes() == a
+    assert (tmp_path / "customer.img.map").read_text() == map_before
+    # Confirmed by the user (same drive, other adapter): it continues instead.
+    job, _ = _image(MemoryDevice(a), _disk("OTHER-ADAPTER", len(a)), out, same_drive=True)
+    assert job.run().outcome == "success"
+    assert out.read_bytes() == a
+
+
+def test_unknown_existing_file_is_never_overwritten(tmp_path):
+    data = os.urandom(1 * MiB)
+    out = tmp_path / "important.img"
+    out.write_bytes(b"not an image of this drive" * 100)
+    job, _ = _image(MemoryDevice(data), _disk("S", len(data)), out)
+    summary = job.run()
+    assert summary.outcome == "failed" and "already exists" in summary.error
+    assert out.read_bytes() == b"not an image of this drive" * 100
+    assert not (tmp_path / "important.img.map").exists()
+
+
+def test_image_of_a_different_size_is_refused(tmp_path):
+    small, big = os.urandom(2 * MiB), os.urandom(3 * MiB)
+    out = tmp_path / "disk.img"
+    job, _ = _image(MemoryDevice(small), _disk("S", len(small)), out)
+    assert job.run().outcome == "success"
+    job, _ = _image(MemoryDevice(big), _disk("S", len(big)), out, same_drive=True)
+    summary = job.run()
+    assert summary.outcome == "failed" and "different size" in summary.error
+    assert out.read_bytes() == small
+
+
+def test_ddrescue_map_without_source_is_resumed(tmp_path):
+    """A GNU ddrescue mapfile has no source line; it is continued (with a note), not refused."""
+    data = os.urandom(2 * MiB)
+    out = tmp_path / "rescue.img"
+    out.write_bytes(data[:MiB] + bytes(MiB))
+    (tmp_path / "rescue.img.map").write_text(
+        "# Mapfile. Created by GNU ddrescue version 1.27\n"
+        "# current_pos  current_status  current_pass\n"
+        "0x00100000     ?               1\n"
+        "#      pos        size  status\n"
+        "0x00000000  0x00100000  +\n"
+        f"0x00100000  0x{MiB:08X}  ?\n")
+    job, reader = _image(MemoryDevice(data), _disk("S", len(data)), out)
+    summary = job.run()
+    assert summary.outcome == "success"
+    assert out.read_bytes() == data
+    assert reader.stats.bytes_ok == MiB  # only the missing half was read
+    saved = SectorMap.load(str(out) + ".map")
+    assert saved.source == _disk("S", len(data)).identity
