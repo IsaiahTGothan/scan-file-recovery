@@ -1150,6 +1150,13 @@ class MainWindow(QMainWindow):
 
     # ================================================================ browsing
     def _apply_filter(self) -> None:
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._apply_filter_now()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _apply_filter_now(self) -> None:
         flt = ViewFilter(
             text=self.search.text().strip(),
             category=self.category.currentText(),
@@ -1263,6 +1270,13 @@ class MainWindow(QMainWindow):
             self.list.setColumnHidden(actions[chosen], not chosen.isChecked())
 
     def _tick_all_shown(self) -> None:
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._tick_all_now()
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def _tick_all_now(self) -> None:
         if self.list_model.search_mode:
             for node in self.list_model.rows:
                 if node.children is None:
