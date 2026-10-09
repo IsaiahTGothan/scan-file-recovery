@@ -24,6 +24,8 @@ def images() -> dict:
     try:
         index = build_all(IMAGES)
     except ToolMissing as exc:
+        if os.environ.get("LIFEBOAT_REQUIRE_IMAGES"):
+            raise
         pytest.skip(f"image tool not installed: {exc}")
     except Exception as exc:  # noqa: BLE001
         if os.environ.get("LIFEBOAT_REQUIRE_IMAGES"):

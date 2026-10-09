@@ -27,7 +27,7 @@ jobs:
       - name: Filesystem tools for the reference disk images
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y -q ntfs-3g dosfstools mtools exfatprogs exfat-fuse fdisk gdisk ffmpeg \
+          sudo apt-get install -y -q ntfs-3g attr dosfstools mtools exfatprogs exfat-fuse fdisk gdisk ffmpeg \
             libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3
       - name: Install
         run: |

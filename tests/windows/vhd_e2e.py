@@ -78,6 +78,8 @@ def write(root: str, rel: str, content: bytes, manifest: dict, mtime: float | No
     os.makedirs(long(os.path.dirname(target)), exist_ok=True)
     with open(long(target), "wb") as fh:
         fh.write(content)
+        fh.flush()
+        os.fsync(fh.fileno())  # make sure the data is on disk, not only in the Windows cache
     if mtime is not None:
         os.utime(long(target), (mtime, mtime))
     manifest[rel.replace("\\", "/")] = {"size": len(content), "sha256": hashlib.sha256(content).hexdigest(),
@@ -118,6 +120,9 @@ def cmd_create() -> None:
     write(root, r"Trash\deleted note.txt", data("del2", 5_000), manifest)
     write(root, r"Old Project\plan.docx", data("del3", 80_000), manifest)
     write(root, r"Old Project\sub\budget.xlsx", data("del4", 40_000), manifest)
+    # Flush everything first: a real deleted file was written long before it was deleted.
+    powershell(f"Write-VolumeCache -DriveLetter {letter}")
+    time.sleep(1)
     os.remove(os.path.join(root, r"Trash\deleted photo.jpg"))
     os.remove(os.path.join(root, r"Trash\deleted note.txt"))
     shutil.rmtree(os.path.join(root, "Old Project"))
@@ -169,7 +174,10 @@ def _check_recovered(job_dir: str, volume_folder_hint: str = "") -> list[str]:
         if os.path.getsize(path) != entry["size"]:
             problems.append(f"size: {rel}")
         elif _sha(path[4:] if path.startswith("\\\\?\\") else path) != entry["sha256"]:
-            problems.append(f"content: {rel}")
+            with open(long(path[4:] if path.startswith("\\\\?\\") else path), "rb") as fh:
+                head = fh.read(65536)
+            zeros = "all zeros" if not head.strip(b"\0") else "non-zero data"
+            problems.append(f"content: {rel} ({zeros})")
         if entry.get("mtime") and abs(os.path.getmtime(path) - entry["mtime"]) > 2:
             problems.append(f"mtime: {rel}")
         if entry.get("deep") and len(path) < 300:
@@ -205,6 +213,11 @@ def cmd_verify_api() -> None:
     assert len(ntfs) == 1, [v.title for v in result.volumes]
     files = [n for n in ntfs[0].root.walk() if not n.flags & (F.DIR | F.SYSTEM | F.STREAM)]
     print(f"found {len(files)} files", flush=True)
+    deleted = [n for n in files if n.flags & F.DELETED]
+    for n in deleted:
+        print(f"  deleted: {n.path()} size={n.size} overwritten={bool(n.flags & F.OVERWRITTEN)}", flush=True)
+    assert len(deleted) == 4, [n.path() for n in deleted]
+    assert not [n for n in deleted if n.flags & F.OVERWRITTEN]
     # The destination may not be on the disk being recovered.
     if state["letter"]:
         report = check_destination(f"{state['letter']}:\\out", device.info, 100)
