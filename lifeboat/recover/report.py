@@ -50,13 +50,20 @@ def _atomic_write(path: str, data: bytes) -> None:
     os.replace(long_path(tmp), long_path(path))
 
 
+def _cell(value: object) -> object:
+    """Text from the drive (file names) must never become a spreadsheet formula."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + value
+    return value
+
+
 def build_csv(tasks: list[FileTask]) -> bytes:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["Status", "Original path", "Recovered as", "Size (bytes)", "Recovered bytes",
                      "Unreadable bytes", "Unreadable byte ranges", "SHA-256", "Code", "Message", "Notes"])
     for task in tasks:
-        writer.writerow([
+        writer.writerow([_cell(value) for value in [
             _STATUS_STYLE.get(task.status, (task.status, ""))[0],
             task.source_path,
             task.rel_path if task.status in ("ok", "partial") else "",
@@ -68,7 +75,7 @@ def build_csv(tasks: list[FileTask]) -> bytes:
             task.code,
             task.message,
             " | ".join(task.notes),
-        ])
+        ]])
     return buf.getvalue().encode("utf-8-sig")
 
 
