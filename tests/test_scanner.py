@@ -11,7 +11,7 @@ from lifeboat.events import Choice, EventBus, InterventionHandler, Level
 from lifeboat.fs.model import F
 from lifeboat.fs.ntfs import NtfsBoot
 from lifeboat.rescue.reader import ReadPolicy, RescueReader
-from lifeboat.scan.scanner import ScanOptions, Scanner
+from lifeboat.scan.scanner import Scanner, ScanOptions
 from tests.conftest import IMAGES, image_path, manifest, sha256
 from tests.helpers import find, is_complete, read_all, tree_index
 

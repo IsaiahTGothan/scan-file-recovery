@@ -16,7 +16,7 @@ from lifeboat.device.image import ImageDevice
 from lifeboat.device.simulated import FaultPlan, SimulatedFailingDevice
 from lifeboat.errors import E_DEST_FAT32, E_DEST_FULL, E_DEST_ON_SOURCE
 from lifeboat.events import Choice, EventBus, InterventionHandler, JobControl, Level
-from lifeboat.fs.model import F, Extent, FileLayout, Node, Volume
+from lifeboat.fs.model import Extent, F, FileLayout, Node, Volume
 from lifeboat.recover import RecoveryJob, RecoveryOptions, Status, check_destination
 from lifeboat.recover.names import NameSpace, sanitize
 from lifeboat.rescue.reader import ReadPolicy, RescueReader

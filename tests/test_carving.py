@@ -18,7 +18,7 @@ from lifeboat.device.image import ImageDevice
 from lifeboat.events import EventBus
 from lifeboat.fs.carving import Carver
 from lifeboat.rescue.reader import ReadPolicy, RescueReader
-from lifeboat.scan.scanner import ScanOptions, Scanner
+from lifeboat.scan.scanner import Scanner, ScanOptions
 from tests.conftest import sha256
 from tests.helpers import read_all
 
