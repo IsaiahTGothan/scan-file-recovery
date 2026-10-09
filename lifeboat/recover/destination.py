@@ -190,6 +190,18 @@ def disks_for_path(path: str) -> set[str]:
     return {f"/dev/{os.path.basename(real)}"}
 
 
+def is_network_path(path: str) -> bool:
+    """True for network shares (UNC paths, mapped network drives)."""
+    if IS_WINDOWS:
+        try:
+            from ..device.windows import is_network_path as _win
+
+            return _win(os.path.abspath(path))
+        except Exception:  # noqa: BLE001
+            return False
+    return False
+
+
 def disks_for_source(path: str, kind: str, disk_number: int | None) -> set[str]:
     if IS_WINDOWS:
         if kind in ("disk", "volume") and disk_number is not None:

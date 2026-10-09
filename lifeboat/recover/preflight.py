@@ -13,6 +13,7 @@ from .destination import (
     disks_for_path,
     disks_for_source,
     free_space,
+    is_network_path,
     long_path,
     make_dirs,
     volume_filesystem,
@@ -80,6 +81,14 @@ def check_destination(destination: str, source: DeviceInfo, needed: int, largest
             True,
         ))
         return report
+    if src_disks and not dest_disks and not is_network_path(probe_path):
+        # The check above could not run: say so instead of silently allowing it.
+        report.issues.append(PreflightIssue(
+            E_DEST_ON_SOURCE,
+            "Lifeboat could not check which drive this folder is on. Make sure it is not on the drive "
+            "you are recovering.",
+            False,
+        ))
     if source.kind == "image" and os.path.abspath(source.path).startswith(dest + os.sep):
         report.issues.append(PreflightIssue(
             E_DEST_ON_SOURCE, "The destination folder contains the disk image being recovered.", False))

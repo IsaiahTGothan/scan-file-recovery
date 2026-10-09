@@ -76,6 +76,7 @@ IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000
 
 DRIVE_REMOVABLE = 2
 DRIVE_FIXED = 3
+DRIVE_REMOTE = 4
 
 _BUS_TYPES = {
     0: "Unknown", 1: "SCSI", 2: "ATAPI", 3: "ATA", 4: "FireWire", 5: "SSA", 6: "Fibre Channel",
@@ -124,6 +125,8 @@ GetVolumeInformationW = _fn(
 )
 GetWindowsDirectoryW = _fn("GetWindowsDirectoryW", [wintypes.LPWSTR, wintypes.UINT], wintypes.UINT)
 GetVolumePathNameW = _fn("GetVolumePathNameW", [wintypes.LPCWSTR, wintypes.LPWSTR, DWORD], BOOL)
+GetVolumeNameForVolumeMountPointW = _fn("GetVolumeNameForVolumeMountPointW",
+                                        [wintypes.LPCWSTR, wintypes.LPWSTR, DWORD], BOOL)
 SetErrorMode = _fn("SetErrorMode", [wintypes.UINT], wintypes.UINT)
 
 # Never let Windows pop up "insert a disk"/critical-error boxes for failing media.
@@ -327,7 +330,11 @@ def disks_for_path(path: str) -> list[int]:
     elif root.startswith("\\\\?\\Volume{"):
         device = root
     else:
-        return []
+        # A volume mounted in a folder (such as C:\Data\Disk2): ask for its volume name.
+        guid = ctypes.create_unicode_buffer(1024)
+        if not GetVolumeNameForVolumeMountPointW(buf.value, guid, 1024):
+            return []
+        device = guid.value.rstrip("\\")
     try:
         handle = _open(device, 0)
     except DeviceOpenError:
@@ -336,6 +343,17 @@ def disks_for_path(path: str) -> list[int]:
         return sorted({disk for disk, _s, _l in _volume_disk_extents(handle)})
     finally:
         CloseHandle(handle)
+
+
+def is_network_path(path: str) -> bool:
+    """True for UNC paths and mapped network drives."""
+    buf = ctypes.create_unicode_buffer(1024)
+    if not GetVolumePathNameW(path, buf, 1024):
+        return path.startswith("\\\\") and not path.startswith(("\\\\?\\", "\\\\.\\"))
+    root = buf.value
+    if root.startswith("\\\\") and not root.startswith(("\\\\?\\", "\\\\.\\")):
+        return True
+    return GetDriveTypeW(root) == DRIVE_REMOTE
 
 
 def list_devices() -> list[DeviceInfo]:

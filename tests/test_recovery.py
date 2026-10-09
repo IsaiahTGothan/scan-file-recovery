@@ -254,6 +254,22 @@ def test_destination_on_source_disk_is_refused(tmp_path):
     assert report.blocking[0].code == E_DEST_ON_SOURCE
 
 
+def test_unknown_destination_drive_is_flagged_not_silently_allowed(tmp_path, monkeypatch):
+    """If the destination's drive cannot be determined, the same-drive check says so."""
+    from lifeboat.recover import preflight
+
+    monkeypatch.setattr(preflight, "disks_for_path", lambda path: set())
+    monkeypatch.setattr(preflight, "is_network_path", lambda path: False)
+    source = DeviceInfo(path=r"\\.\PhysicalDrive4", kind="disk", size=1 << 30, disk_number=4)
+    report = check_destination(str(tmp_path / "out"), source, needed=1000)
+    assert report.ok  # a warning, not a refusal
+    assert [i.code for i in report.warnings] == [E_DEST_ON_SOURCE]
+    assert "could not check" in report.warnings[0].message
+    # A network share is never on the source drive: no warning.
+    monkeypatch.setattr(preflight, "is_network_path", lambda path: True)
+    assert not check_destination(str(tmp_path / "out"), source, needed=1000).issues
+
+
 def test_preflight_space_and_writability(tmp_path):
     source = DeviceInfo(path="img", kind="image", size=1 << 30)
     report = check_destination(str(tmp_path / "out"), source, needed=10)
