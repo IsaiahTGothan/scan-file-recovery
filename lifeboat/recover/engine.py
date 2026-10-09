@@ -46,6 +46,8 @@ from ..errors import (
     E_INTERNAL,
     E_VERIFY,
     Cancelled,
+    DeviceGoneError,
+    DeviceHungError,
 )
 from ..events import (
     Choice,
@@ -329,9 +331,10 @@ class RecoveryJob:
             task = FileTask(node, node.path(), rel, node_key(node), node.size)
             tasks.append(task)
         for task in tasks:
-            vol = task.node.volume
             try:
-                task.order = vol.layout(task.node).first_disk_offset() if vol is not None else -1
+                task.order = self._layout(task).first_disk_offset()
+            except (Cancelled, DeviceGoneError, DeviceHungError):
+                raise
             except Exception:  # noqa: BLE001 - ordering is an optimisation only
                 task.order = -1
         tasks.sort(key=lambda t: t.order)
@@ -523,13 +526,23 @@ class RecoveryJob:
         return run_with_device_retry(lambda: reader.read(start, end, mode), self.reader, self.interventions,
                                      self.events, self.control, "recovering files")
 
+    def _layout(self, task: FileTask) -> FileLayout:
+        """The file's location. Finding it can read the drive (FAT pages are loaded on
+        demand), so a disconnect here pauses for the drive like any other read."""
+        vol = task.node.volume
+        if vol is None:
+            return FileLayout(0)
+        return run_with_device_retry(lambda: vol.layout(task.node), self.reader, self.interventions,
+                                     self.events, self.control, "recovering files")
+
     # --------------------------------------------------------- copy (pass 1)
     def _copy_task(self, task: FileTask, index: int, count: int) -> None:
         node = task.node
-        vol = node.volume
         self._report_progress(task.source_path, index, count, force=index == 0)
         try:
-            layout = vol.layout(node) if vol is not None else FileLayout(0)
+            layout = self._layout(task)
+        except (Cancelled, DeviceGoneError, DeviceHungError):
+            raise
         except Exception as exc:
             log.exception("layout failed for %s", task.source_path)
             self._fail(task, E_FILE_LOST, f"The file's location could not be decoded: {exc}")
@@ -638,11 +651,12 @@ class RecoveryJob:
 
     # ------------------------------------------------------- rescue passes
     def _patch_task(self, task: FileTask, mode: ReadMode, index: int, count: int) -> None:
-        vol = task.node.volume
-        if vol is None:
+        if task.node.volume is None:
             return
         try:
-            layout = vol.layout(task.node)
+            layout = self._layout(task)
+        except (Cancelled, DeviceGoneError, DeviceHungError):
+            raise
         except Exception:
             log.exception("layout failed for %s", task.source_path)
             return

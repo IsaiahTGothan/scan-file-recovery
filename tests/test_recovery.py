@@ -196,6 +196,21 @@ def test_recovery_survives_source_disconnect(images, tmp_path):
     assert all(t.status == Status.OK for t in summary.tasks), [t.message for t in summary.tasks if t.message]
 
 
+def test_disconnect_while_finding_a_files_location_waits_for_the_drive(images, tmp_path):
+    """FAT pages are loaded on demand, so even finding where a file is can hit a disconnect."""
+    dev = SimulatedFailingDevice(ImageDevice(image_path("fat32")), FaultPlan())
+    reader, info, result, events = scan_device(dev)
+    files = [n for n in all_files(result.root) if n.size and not n.flags & F.DELETED][:5]
+    for vol in {n.volume for n in files}:
+        vol.fat._pages.clear()  # as after the scan of a big FAT32 drive: pages were evicted
+    reader.cache.clear()
+    dev.plan.disconnect_after_reads = dev.reads  # the very next read finds the drive gone
+    handler = Reconnect(dev)
+    job, summary = run_job(files, reader, info, tmp_path, handler=handler, events=events)
+    assert handler.history, "the disconnect must reach the user"
+    assert all(t.status == Status.OK for t in summary.tasks), [(t.source_path, t.message) for t in summary.tasks]
+
+
 class ImpatientUser(InterventionHandler):
     """Presses Retry before the drive is back, then plugs it in and presses Retry again."""
 
