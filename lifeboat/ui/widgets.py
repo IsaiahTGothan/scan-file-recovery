@@ -314,7 +314,7 @@ class Toast(QFrame):
         close.setFlat(True)
         close.setFixedSize(24, 24)
         close.setStyleSheet("QPushButton { border: none; background: transparent; padding: 0; }")
-        close.clicked.connect(lambda: self.closed.emit(self))
+        close.clicked.connect(self._close)
         layout.addWidget(close, 0, Qt.AlignmentFlag.AlignTop)
         self.setFixedWidth(380)
         if timeout_ms > 0:
@@ -322,8 +322,14 @@ class Toast(QFrame):
             # fire after the user (or a newer toast) closed this one and touch a deleted widget.
             self._expiry = QTimer(self)
             self._expiry.setSingleShot(True)
-            self._expiry.timeout.connect(lambda: self.closed.emit(self))
+            self._expiry.timeout.connect(self._close)
             self._expiry.start(timeout_ms)
+
+    # Signals are connected to methods, never to lambdas that capture ``self``: such a lambda
+    # keeps the widget alive (a reference cycle through Qt that Python cannot collect) until
+    # the interpreter shuts down, and destroying widgets that late crashes PySide.
+    def _close(self) -> None:
+        self.closed.emit(self)
 
 
 class ToastArea(QObject):
@@ -378,6 +384,18 @@ class ToastArea(QObject):
             self._close(toast)
 
 
+class _ChoiceButton(QPushButton):
+    chosen = Signal(object)  # Choice
+
+    def __init__(self, text: str, choice: Choice) -> None:
+        super().__init__(text)
+        self.choice = choice
+        self.clicked.connect(self._emit_choice)
+
+    def _emit_choice(self) -> None:
+        self.chosen.emit(self.choice)
+
+
 class Banner(QFrame):
     """Red/amber bar for situations that need the user (disconnects, full disk)."""
 
@@ -428,8 +446,8 @@ class Banner(QFrame):
             if widget is not None:
                 widget.deleteLater()
         for option in iv.options:
-            button = QPushButton(self.LABELS.get(option, option.value.title()))
-            button.clicked.connect(lambda _=False, o=option: self._answer(o))
+            button = _ChoiceButton(self.LABELS.get(option, option.value.title()), option)
+            button.chosen.connect(self._answer)
             self.buttons.addWidget(button)
         self.show()
 
@@ -488,9 +506,13 @@ class PreviewPane(QFrame):
         self.stack.addWidget(self.text)
         layout.addWidget(self.stack, 1)
         self.button = QPushButton(icons.icon("eye"), "Preview")
-        self.button.clicked.connect(lambda: self.node is not None and self.preview_requested.emit(self.node))
+        self.button.clicked.connect(self._preview_clicked)
         layout.addWidget(self.button)
         self.show_node(None)
+
+    def _preview_clicked(self) -> None:
+        if self.node is not None:
+            self.preview_requested.emit(self.node)
 
     def show_node(self, node: Node | None) -> None:
         self.node = node

@@ -23,6 +23,19 @@ def app():
     yield instance
 
 
+@pytest.fixture(autouse=True)
+def _free_windows(app):
+    """Destroy every window a test opened while Qt is fully alive (as the app does on exit)."""
+    yield
+    import shiboken6
+
+    for widget in QtWidgets.QApplication.topLevelWidgets():
+        if shiboken6.isValid(widget) and widget.parent() is None:
+            widget.close()
+            shiboken6.delete(widget)
+    app.processEvents()
+
+
 def _pump(app, seconds=0.3):
     end = time.time() + seconds
     while time.time() < end:
@@ -55,6 +68,9 @@ def _fake_dialogs(monkeypatch, destination):
             return {"destination": str(destination), "job_folder": True, "verify": True,
                     "thoroughness": "standard", "preserve_times": True, "mark_damaged": False, "resume": False}
 
+        def deleteLater(self):
+            pass
+
     class FakeSummary:
         def __init__(self, parent, summary):
             self.summary = summary
@@ -62,6 +78,9 @@ def _fake_dialogs(monkeypatch, destination):
 
         def exec(self):
             return 1
+
+        def deleteLater(self):
+            pass
 
     error_dialogs = []
 
@@ -71,6 +90,9 @@ def _fake_dialogs(monkeypatch, destination):
 
         def exec(self):
             return 0
+
+        def deleteLater(self):
+            pass
 
     monkeypatch.setattr(mw, "RecoverDialog", FakeDialog)
     monkeypatch.setattr(mw, "SummaryDialog", FakeSummary)

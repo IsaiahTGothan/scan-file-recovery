@@ -7,10 +7,14 @@ import sys
 import threading
 import traceback
 from types import TracebackType
+from typing import TYPE_CHECKING
 
 from .. import __version__
 from ..branding import APP_FULL_NAME, APP_ID, PUBLISHER
 from ..logsetup import setup_logging
+
+if TYPE_CHECKING:
+    from PySide6.QtWidgets import QWidget
 
 log = logging.getLogger("lifeboat.ui")
 
@@ -103,16 +107,61 @@ def main(argv: list[str] | None = None) -> int:
     window = MainWindow()
     window.show()
     if smoke:
-        # Packaging check: build the whole window, run the event loop briefly, quit.
+        # Packaging check: build the whole window, open and close every dialog, run the
+        # event loop briefly, quit - and exit cleanly (a crash on exit fails the check).
+        from functools import partial
+
         from PySide6.QtCore import QTimer
 
+        QTimer.singleShot(500, partial(_exercise_dialogs, window))
         QTimer.singleShot(2500, window.close)
         QTimer.singleShot(3000, app.quit)
         code = app.exec()
+        _dispose(window)
         log.info("Smoke test finished (exit %s)", code)
         print("Lifeboat smoke test OK")
         return code
-    return app.exec()
+    code = app.exec()
+    _dispose(window)
+    return code
+
+
+def _exercise_dialogs(window: QWidget) -> None:
+    from ..device.base import DeviceInfo
+    from ..recover import RecoverySummary
+    from .dialogs import (
+        AboutDialog,
+        DeepScanDialog,
+        ErrorDialog,
+        ImageDialog,
+        RecoverDialog,
+        SettingsDialog,
+        SummaryDialog,
+    )
+
+    disk = DeviceInfo(path=r"\\.\PhysicalDrive9", kind="disk", size=1 << 30, model="Smoke test", serial="0")
+    dialogs = [
+        RecoverDialog(window, disk, 3, 3000, 0, 0, 1000), ImageDialog(window, disk), DeepScanDialog(window, disk),
+        SettingsDialog(window), AboutDialog(window), ErrorDialog(window, "Smoke test", "Not a real error."),
+        SummaryDialog(window, RecoverySummary("", [], 0.0)),
+    ]
+    for dialog in dialogs:
+        dialog.show()
+        dialog.close()
+        dialog.deleteLater()
+    log.info("Smoke test opened and closed %d dialogs", len(dialogs))
+
+
+def _dispose(window: QWidget) -> None:
+    """Destroy the window while Qt is fully alive, not later during interpreter shutdown,
+    where the order in which Python frees objects can crash Qt."""
+    try:
+        import shiboken6
+
+        if shiboken6.isValid(window):
+            shiboken6.delete(window)
+    except Exception:  # quitting must never fail
+        log.exception("Could not close the window cleanly")
 
 
 if __name__ == "__main__":

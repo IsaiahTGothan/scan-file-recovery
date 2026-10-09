@@ -146,7 +146,7 @@ class MainWindow(QMainWindow):
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
         self._device_timer = QTimer(self)
-        self._device_timer.timeout.connect(lambda: self.refresh_devices(quiet=True))
+        self._device_timer.timeout.connect(self._refresh_quietly)
         self._device_timer.start(6000)
         self.refresh_devices()
         self._update_actions()
@@ -555,9 +555,8 @@ class MainWindow(QMainWindow):
         b.finished.connect(self._on_finished)
         b.failed.connect(self._on_failed)
         b.cancelled.connect(self._on_cancelled)
-        self.banner.answered.connect(lambda _p, _c: self._attention_done())
         self.sources.source_selected.connect(self.select_source)
-        self.btn_refresh.clicked.connect(lambda: self.refresh_devices())
+        self.btn_refresh.clicked.connect(self._refresh_now)
         self.btn_open.clicked.connect(self.open_image)
         for button in (self.btn_scan, self.ov_scan):
             button.clicked.connect(self.quick_scan)
@@ -568,11 +567,11 @@ class MainWindow(QMainWindow):
         self.ov_admin.clicked.connect(self.restart_as_admin)
         self.btn_recover.clicked.connect(self.recover)
         self.btn_settings.clicked.connect(self.open_settings)
-        self.btn_help.clicked.connect(lambda: AboutDialog(self).exec())
+        self.btn_help.clicked.connect(self._show_about)
         self.btn_pause.clicked.connect(self.toggle_pause)
         self.btn_stop.clicked.connect(self.stop_job)
         self.btn_finish.clicked.connect(self.finish_job)
-        self.problem_badge.clicked.connect(lambda: self.tabs.setCurrentIndex(1))
+        self.problem_badge.clicked.connect(self._show_problems_tab)
         self.selection.changed.connect(self._selection_changed)
         self.tree.selectionModel().currentChanged.connect(self._folder_changed)
         self.list.doubleClicked.connect(self._list_activated)
@@ -581,24 +580,52 @@ class MainWindow(QMainWindow):
         self.preview.preview_requested.connect(self.preview_node)
         self.search.returnPressed.connect(self._apply_filter)
         self.search.textChanged.connect(self._search_edited)
-        self.category.currentIndexChanged.connect(lambda _i: self._apply_filter())
-        self.status_filter.currentIndexChanged.connect(lambda _i: self._apply_filter())
+        self.category.currentIndexChanged.connect(self._filter_changed)
+        self.status_filter.currentIndexChanged.connect(self._filter_changed)
         self.btn_select_all.clicked.connect(self._tick_all_shown)
-        self.btn_select_none.clicked.connect(lambda: self.selection.select_all(False))
+        self.btn_select_none.clicked.connect(self._tick_none)
         self.problems.selectionModel().currentChanged.connect(self._problem_selected)
-        self.results_mode.currentIndexChanged.connect(
-            lambda i: self.results_model.set_mode(["problems", "ok", "all"][i]))
+        self.results_mode.currentIndexChanged.connect(self._results_mode_changed)
         self.btn_open_dest.clicked.connect(self._open_destination)
         self.btn_open_report.clicked.connect(self._open_report)
         self.results.doubleClicked.connect(self._result_activated)
         for key, slot in (("Ctrl+R", self.quick_scan), ("Ctrl+S", self.recover), ("Ctrl+O", self.open_image),
-                          ("F5", lambda: self.refresh_devices())):
+                          ("F5", self._refresh_now)):
             action = QAction(self)
             action.setShortcut(QKeySequence(key))
             action.triggered.connect(slot)
             self.addAction(action)
 
     # ================================================================ devices
+    # Slots are methods, never lambdas capturing ``self`` (see widgets.Toast._close).
+    def _refresh_quietly(self) -> None:
+        self.refresh_devices(quiet=True)
+
+    def _refresh_now(self) -> None:
+        self.refresh_devices()
+
+    def _show_error(self, title: str, message: str, details: str = "", hint: str = "") -> None:
+        dialog = ErrorDialog(self, title, message, details, hint)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _show_about(self) -> None:
+        dialog = AboutDialog(self)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _show_problems_tab(self) -> None:
+        self.tabs.setCurrentIndex(1)
+
+    def _filter_changed(self, _index: int) -> None:
+        self._apply_filter()
+
+    def _tick_none(self) -> None:
+        self.selection.select_all(False)
+
+    def _results_mode_changed(self, index: int) -> None:
+        self.results_model.set_mode(["problems", "ok", "all"][index])
+
     def refresh_devices(self, quiet: bool = False) -> None:
         if self._enum_running or (quiet and (self.job is not None or not self.isActiveWindow())):
             return
@@ -860,9 +887,11 @@ class MainWindow(QMainWindow):
             self.toasts.show("warning", "Select a source", "Choose a drive or image on the left first.")
             return
         dialog = DeepScanDialog(self, self.info)
-        if dialog.exec() != dialog.DialogCode.Accepted:
-            return
+        accepted = dialog.exec() == dialog.DialogCode.Accepted
         values = dialog.values()
+        dialog.deleteLater()  # dialogs are freed after use, not kept as hidden children
+        if not accepted:
+            return
         reader, info, previous = self.reader, self.info, self.result
         self._detach_tree()
         options = ScanOptions(find_partitions=values["find_partitions"], carve=values["carve"],
@@ -910,9 +939,11 @@ class MainWindow(QMainWindow):
         over = sum(1 for n in files if n.size > FOUR_GB)
         largest = max((n.size for n in files), default=0)
         dialog = RecoverDialog(self, self.info, len(files), size, self.selection.hidden_selected, over, largest)
-        if dialog.exec() != dialog.DialogCode.Accepted:
-            return
+        accepted = dialog.exec() == dialog.DialogCode.Accepted
         values = dialog.values()
+        dialog.deleteLater()
+        if not accepted:
+            return
         options = RecoveryOptions(**values)
         folders = self.selection.selected_folders()
         reader, info = self.reader, self.info
@@ -935,9 +966,11 @@ class MainWindow(QMainWindow):
             self.toasts.show("info", "Already an image", "This source is already a disk image.")
             return
         dialog = ImageDialog(self, self.device.info if self.device else self.info)
-        if dialog.exec() != dialog.DialogCode.Accepted:
-            return
+        accepted = dialog.exec() == dialog.DialogCode.Accepted
         values = dialog.values()
+        dialog.deleteLater()
+        if not accepted:
+            return
         reader, info = self.reader, self.info
 
         def work(job: Job) -> ImagingSummary:
@@ -1040,7 +1073,7 @@ class MainWindow(QMainWindow):
             self._show_result(self.result)
         self.bus.critical(f"The {kind} stopped because of an unexpected error: {message}", code="LB-500")
         self._notify("critical", "Something went wrong", message)
-        ErrorDialog(self, "Unexpected error", message, details, describe("LB-500").hint).exec()
+        self._show_error("Unexpected error", message, details, describe("LB-500").hint)
 
     def _on_cancelled(self, kind: str) -> None:
         self._job_done()
@@ -1065,7 +1098,9 @@ class MainWindow(QMainWindow):
         self._notify(level, title, summary.headline())
         dialog = SummaryDialog(self, summary)
         dialog.exec()
-        if dialog.show_problems:
+        show_problems = dialog.show_problems
+        dialog.deleteLater()
+        if show_problems:
             self.results_mode.setCurrentIndex(0)
             self.tabs.setCurrentIndex(2)
 
@@ -1075,7 +1110,7 @@ class MainWindow(QMainWindow):
                 f"{format_size(summary.bad)} unreadable.")
         self._notify(level, "Imaging finished" if not summary.cancelled else "Imaging stopped", text)
         if summary.error:
-            ErrorDialog(self, "Imaging failed", summary.error).exec()
+            self._show_error("Imaging failed", summary.error)
             return
         box = QMessageBox(self)
         box.setWindowTitle("Disk image")
@@ -1086,7 +1121,9 @@ class MainWindow(QMainWindow):
         open_btn = box.addButton("Open the image", QMessageBox.ButtonRole.AcceptRole)
         box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
         box.exec()
-        if box.clickedButton() is open_btn:
+        open_now = box.clickedButton() is open_btn
+        box.deleteLater()
+        if open_now:
             info = DeviceInfo(path=summary.output, kind="image", size=summary.size, model="Disk image")
             self.images = [i for i in self.images if i.path != info.path] + [info]
             self.sources.set_devices(self.devices + self.images, info.identity)
@@ -1147,9 +1184,6 @@ class MainWindow(QMainWindow):
         if bool(setting("sounds", True)):
             beep(kind)
         QApplication.alert(self, 0)
-
-    def _attention_done(self) -> None:
-        pass
 
     def _on_intervention(self, pending: PendingDecision) -> None:
         self.banner.ask(pending)
@@ -1362,7 +1396,9 @@ class MainWindow(QMainWindow):
 
     def open_settings(self) -> None:
         dialog = SettingsDialog(self)
-        if dialog.exec() == dialog.DialogCode.Accepted:
+        accepted = dialog.exec() == dialog.DialogCode.Accepted
+        dialog.deleteLater()
+        if accepted:
             from . import theme as theme_module
 
             theme_module.apply(QApplication.instance(), str(setting("theme", "dark")))  # type: ignore[arg-type]

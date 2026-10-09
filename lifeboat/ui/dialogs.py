@@ -225,8 +225,11 @@ class RecoverDialog(QDialog):
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._validate)
-        self.dest.textChanged.connect(lambda: self._timer.start(400))
+        self.dest.textChanged.connect(self._dest_edited)
         self._validate()
+
+    def _dest_edited(self) -> None:
+        self._timer.start(400)  # validate once typing pauses
 
     def _browse(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose where to save the recovered files",

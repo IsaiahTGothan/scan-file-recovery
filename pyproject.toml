@@ -9,7 +9,8 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "Zays" }]
-dependencies = ["PySide6-Essentials>=6.7"]
+# Pinned: the version that is tested and bundled into the installer. Update deliberately.
+dependencies = ["PySide6-Essentials==6.12.0"]
 dynamic = ["version"]
 
 [project.optional-dependencies]
