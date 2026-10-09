@@ -85,8 +85,8 @@ Names Windows can't use are made safe and visible. For example, `what?.txt` beco
 
 Lifeboat makes problems impossible to miss:
 
-* **Pop-ups** (bottom right) for warnings and errors. Errors stay until you close them.
-* **A red banner with buttons** whenever Lifeboat needs a decision: the source disconnected, the source stopped responding, or the destination is full or gone. For a disconnected drive it waits and **continues automatically** once the drive is back.
+* **Pop-ups** (bottom right) for warnings and errors. Errors stay until you close them. When problems arrive in a burst (a dying drive can fail thousands of files), they're summed up in one "N more problems" pop-up instead of flooding the screen.
+* **A red banner with buttons** whenever Lifeboat needs a decision: the source disconnected, the source stopped responding, or the destination is full or gone. For a disconnected drive it waits and **continues automatically** once the drive is back. Pressing Retry too early is harmless: it just keeps waiting.
 * **Problems tab**: every warning and error with its code, an explanation, and what to do. The badge in the status bar shows the count.
 * **Windows notification, sound and taskbar flash** when a job finishes or needs you while the window is in the background (configurable in Settings).
 * **Disk map**: a live picture of the drive showing what was read, skipped, failed or found bad.
