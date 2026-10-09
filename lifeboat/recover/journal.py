@@ -8,6 +8,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
 from .destination import long_path
 
@@ -32,7 +33,7 @@ class Journal:
         self.dir = os.path.join(job_dir, META_DIR)
         self.path = os.path.join(self.dir, JOURNAL)
         self._lock = threading.Lock()
-        self._fh = None
+        self._fh: TextIO | None = None
 
     def open(self, header: dict) -> None:
         os.makedirs(long_path(self.dir), exist_ok=True)

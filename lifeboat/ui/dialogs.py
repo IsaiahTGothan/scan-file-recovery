@@ -34,7 +34,7 @@ from ..errors import E_DEST_SPACE
 from ..fs.carving import GROUPS
 from ..imaging import check_image_destination
 from ..logsetup import log_dir
-from ..recover import RecoverySummary, Status, check_destination, find_resumable
+from ..recover import PreflightReport, RecoverySummary, Status, check_destination, find_resumable
 from ..util import format_duration, format_size
 from . import icons
 from .theme import current
@@ -48,18 +48,37 @@ def settings() -> QSettings:
     return QSettings(ORG, APP)
 
 
+def setting_bool(key: str, default: bool) -> bool:
+    return bool(setting(key, default))
+
+
+def setting_int(key: str, default: int) -> int:
+    value = setting(key, default)
+    return value if isinstance(value, int) else default
+
+
+def setting_float(key: str, default: float) -> float:
+    value = setting(key, default)
+    return float(value) if isinstance(value, int | float) else default
+
+
+def setting_str(key: str, default: str) -> str:
+    value = setting(key, default)
+    return str(value) if value is not None else default
+
+
 def setting(key: str, default: object) -> object:
     value = settings().value(key, default)
     if isinstance(default, bool):
         return value in (True, "true", "1", 1)
     if isinstance(default, int):
         try:
-            return int(value)  # type: ignore[arg-type]
+            return int(str(value))
         except (TypeError, ValueError):
             return default
     if isinstance(default, float):
         try:
-            return float(value)  # type: ignore[arg-type]
+            return float(str(value))
         except (TypeError, ValueError):
             return default
     return value
@@ -131,10 +150,10 @@ class RecoverDialog(QDialog):
         self.setMinimumWidth(640)
         self.source = source
         self.count = count
-        self.size = size
+        self.total_size = size
         self.files_over_4g = files_over_4g
         self.largest = largest
-        self.report = None
+        self.report: PreflightReport | None = None
         self.resume_info: tuple[dict, int] | None = None
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -243,7 +262,7 @@ class RecoverDialog(QDialog):
                 self.resume.setChecked(True)
                 self.resume.blockSignals(False)
         self.job_folder.setEnabled(not (resumable and self.resume.isChecked()))
-        report = check_destination(path, self.source, self.size, self.largest, self.files_over_4g,
+        report = check_destination(path, self.source, self.total_size, self.largest, self.files_over_4g,
                                    allow_low_space=True)
         self.report = report
         for issue in report.issues:
@@ -409,7 +428,7 @@ class DeepScanDialog(QDialog):
             self.groups[group] = box
             grid.addWidget(box, i // 3, i % 3)
         layout.addLayout(grid)
-        self.carve.toggled.connect(lambda on: [b.setEnabled(on) for b in self.groups.values()])
+        self.carve.toggled.connect(self._carve_toggled)
         tip = QLabel("Tip: for a drive that is failing, create a disk image first and deep-scan the image.")
         tip.setWordWrap(True)
         tip.setProperty("muted", True)
@@ -421,6 +440,10 @@ class DeepScanDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _carve_toggled(self, on: bool) -> None:
+        for box in self.groups.values():
+            box.setEnabled(on)
 
     def values(self) -> dict:
         groups = {g for g, b in self.groups.items() if b.isChecked()}
@@ -443,13 +466,13 @@ class SettingsDialog(QDialog):
         self.timeout = QSpinBox()
         self.timeout.setRange(3, 120)
         self.timeout.setSuffix(" s")
-        self.timeout.setValue(int(setting("read_timeout", 15)))
+        self.timeout.setValue(setting_int("read_timeout", 15))
         self.timeout.setToolTip("How long to wait for one read before treating it as failed and moving on.")
         form.addRow("Give up on a read after", self.timeout)
         self.meta = QSpinBox()
         self.meta.setRange(0, 3600)
         self.meta.setSuffix(" s")
-        self.meta.setValue(int(setting("metadata_retry", 180)))
+        self.meta.setValue(setting_int("metadata_retry", 180))
         self.meta.setToolTip("Time spent re-reading unreadable parts of a file table during a scan.")
         form.addRow("Retry damaged file tables for", self.meta)
         self.system_files = QCheckBox("Show NTFS system files ($MFT, \u2026) and alternate data streams")

@@ -57,8 +57,13 @@ check_untyped_defs = true
 exclude = ["tests/", "build/", "dist/"]
 
 [[tool.mypy.overrides]]
-module = ["lifeboat.device.windows", "lifeboat.recover.winapi"]
+module = ["lifeboat.device.windows", "lifeboat.recover.winverify"]
 ignore_errors = true
+
+[[tool.mypy.overrides]]
+# PySide6 stubs type model indexes and style options more strictly than Qt behaves.
+module = ["lifeboat.ui.*"]
+disable_error_code = ["override", "attr-defined", "union-attr", "arg-type", "call-overload"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

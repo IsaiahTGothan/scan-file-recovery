@@ -64,6 +64,7 @@ from .dialogs import (
     SettingsDialog,
     SummaryDialog,
     setting,
+    setting_float,
 )
 from .models import (
     CATEGORIES,
@@ -539,7 +540,7 @@ class MainWindow(QMainWindow):
     # ================================================================ signals
     def _connect(self) -> None:
         b = self.bridge
-        b.event.connect(self._on_event)
+        b.event_emitted.connect(self._on_event)
         b.progress.connect(self._on_progress)
         b.intervention.connect(self._on_intervention)
         b.intervention_resolved.connect(self._on_intervention_resolved)
@@ -571,7 +572,7 @@ class MainWindow(QMainWindow):
         self.list.customContextMenuRequested.connect(self._list_menu)
         self.preview.preview_requested.connect(self.preview_node)
         self.search.returnPressed.connect(self._apply_filter)
-        self.search.textChanged.connect(lambda text: text or self._apply_filter())
+        self.search.textChanged.connect(self._search_edited)
         self.category.currentIndexChanged.connect(lambda _i: self._apply_filter())
         self.status_filter.currentIndexChanged.connect(lambda _i: self._apply_filter())
         self.btn_select_all.clicked.connect(self._tick_all_shown)
@@ -629,7 +630,7 @@ class MainWindow(QMainWindow):
         self.open_error = None
         try:
             self.device = self._open(info)
-            policy = ReadPolicy(timeout=float(setting("read_timeout", 15)))
+            policy = ReadPolicy(timeout=setting_float("read_timeout", 15))
             self.reader = RescueReader(self.device, policy, events=self.bus)
             self.info = self.device.info if info.kind != "image" else info
             if info.kind == "image":
@@ -821,7 +822,8 @@ class MainWindow(QMainWindow):
         text = {"recover": "Stop the recovery? Files already recovered are kept and listed in the report.",
                 "image": "Stop imaging? Everything copied so far is kept; you can continue later.",
                 }.get(self.job.kind, "Stop the current scan?")
-        if QMessageBox.question(self, "Stop", text) == QMessageBox.StandardButton.Yes and self.job is not None:
+        yes, no = QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No
+        if QMessageBox.question(self, "Stop", text, yes | no, no) == yes and self.job is not None:
             self.job.control.cancel()
             self.status_text.setText("Stopping…")
 
@@ -837,7 +839,7 @@ class MainWindow(QMainWindow):
             return
         reader, info = self.reader, self.info
         self._detach_tree()
-        options = ScanOptions(metadata_retry_seconds=float(setting("metadata_retry", 180)))
+        options = ScanOptions(metadata_retry_seconds=setting_float("metadata_retry", 180))
 
         def work(job: Job) -> ScanResult:
             scanner = Scanner(reader, info, self.bus, job.control, job.report, job.handler, options)
@@ -857,7 +859,7 @@ class MainWindow(QMainWindow):
         self._detach_tree()
         options = ScanOptions(find_partitions=values["find_partitions"], carve=values["carve"],
                               carve_groups=values["groups"],
-                              metadata_retry_seconds=float(setting("metadata_retry", 180)))
+                              metadata_retry_seconds=setting_float("metadata_retry", 180))
 
         def work(job: Job) -> ScanResult:
             scanner = Scanner(reader, info, self.bus, job.control, job.report, job.handler, options)
@@ -1011,8 +1013,8 @@ class MainWindow(QMainWindow):
             assert isinstance(result, ImagingSummary)
             self._imaging_done(result)
         elif kind == "preview":
-            node, data, complete = result  # type: ignore[misc]
-            self.preview.show_content(node, data, complete)
+            assert isinstance(result, tuple)
+            self.preview.show_content(result[0], result[1], result[2])
 
     def _on_failed(self, kind: str, message: str, details: str) -> None:
         if kind == "devices":
@@ -1170,6 +1172,10 @@ class MainWindow(QMainWindow):
             self.crumb.setText(self._crumb_text(current_folder))
         self._selection_changed()
 
+    def _search_edited(self, text: str) -> None:
+        if not text:
+            self._apply_filter()
+
     def _crumb_text(self, node: Node | None) -> str:
         if node is None:
             return ""
@@ -1217,11 +1223,15 @@ class MainWindow(QMainWindow):
 
     def _list_menu(self, pos) -> None:
         index = self.list.indexAt(pos)
-        nodes = [self.list_model.node(i) for i in self.list.selectionModel().selectedRows()]
-        nodes = [n for n in nodes if n is not None]
+        nodes: list[Node] = []
+        for row in self.list.selectionModel().selectedRows():
+            picked = self.list_model.node(row)
+            if picked is not None:
+                nodes.append(picked)
         if not nodes and index.isValid():
-            node = self.list_model.node(index)
-            nodes = [node] if node is not None else []
+            picked = self.list_model.node(index)
+            if picked is not None:
+                nodes = [picked]
         menu = QMenu(self)
         tick = menu.addAction(icons.icon("check"), "Tick selected")
         untick = menu.addAction("Untick selected")
@@ -1314,15 +1324,17 @@ class MainWindow(QMainWindow):
             theme_module.apply(QApplication.instance(), str(setting("theme", "dark")))  # type: ignore[arg-type]
             icons.clear_cache()
             if self.reader is not None:
-                self.reader.policy.timeout = float(setting("read_timeout", 15))
+                self.reader.policy.timeout = setting_float("read_timeout", 15)
             self._apply_filter()
             self.toasts.show("success", "Settings saved", "Some changes apply to the next scan.")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.job is not None and self.job.kind in ("scan", "deep", "recover", "image"):
+            yes, no = QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No
             answer = QMessageBox.question(
                 self, "Quit Lifeboat",
-                "A job is still running. Quit anyway? Recovered files are kept and an imaging job can be resumed.")
+                "A job is still running. Quit anyway? Recovered files are kept and an imaging job can be resumed.",
+                yes | no, no)
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return

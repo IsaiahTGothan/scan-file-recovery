@@ -36,7 +36,7 @@ class PendingDecision:
 class Bridge(QObject):
     """Signals are emitted from worker threads and delivered in the GUI thread."""
 
-    event = Signal(object)                 # Event
+    event_emitted = Signal(object)         # Event
     progress = Signal(object)              # Progress
     intervention = Signal(object)          # PendingDecision
     intervention_resolved = Signal(object)  # PendingDecision
@@ -113,6 +113,6 @@ class Job:
 
 def connect_events(bus: EventBus, bridge: Bridge) -> None:
     def relay(event: Event) -> None:
-        bridge.event.emit(event)
+        bridge.event_emitted.emit(event)
 
     bus.subscribe(relay)

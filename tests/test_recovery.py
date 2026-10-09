@@ -202,7 +202,12 @@ def test_destination_on_source_disk_is_refused(tmp_path):
     disks = disks_for_path(str(tmp_path))
     if not disks:
         pytest.skip("cannot resolve the disk of the temp folder here")
-    source = DeviceInfo(path=next(iter(disks)), kind="disk", size=1 << 30)
+    disk = next(iter(disks))
+    if disk.startswith("disk:"):  # Windows: "disk:<number>"
+        number = int(disk.split(":")[1])
+        source = DeviceInfo(path=f"\\\\.\\PhysicalDrive{number}", kind="disk", size=1 << 30, disk_number=number)
+    else:
+        source = DeviceInfo(path=disk, kind="disk", size=1 << 30)
     report = check_destination(str(tmp_path / "out"), source, needed=1000)
     assert not report.ok
     assert report.blocking[0].code == E_DEST_ON_SOURCE

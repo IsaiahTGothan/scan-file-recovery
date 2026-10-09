@@ -316,8 +316,8 @@ class RecoveryJob:
         deleted = [n for n in self.files if n.flags & F.DELETED]
         tasks: list[FileTask] = []
         seen: set[int] = set()
-        for folder in self.folders:
-            self._dest_dir_for(folder)
+        for folder_node in self.folders:
+            self._dest_dir_for(folder_node)
         for node in live + deleted:
             if id(node) in seen or node.flags & F.DIR:
                 continue

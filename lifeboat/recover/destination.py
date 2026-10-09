@@ -78,7 +78,7 @@ if IS_WINDOWS:
     import ctypes
     from ctypes import wintypes
 
-    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
 
     class _FILETIME(ctypes.Structure):
         _fields_ = [("low", wintypes.DWORD), ("high", wintypes.DWORD)]

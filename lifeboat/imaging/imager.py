@@ -19,6 +19,7 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from ..device.base import DeviceInfo
 from ..errors import E_DEST_FAT32, E_DEST_FULL, E_DEST_GONE, E_DEST_ON_SOURCE, E_INTERNAL, Cancelled, LifeboatError
@@ -158,7 +159,7 @@ class ImagingJob:
         self._pass_index = 0
         self._pass_count = 0
         self._phase = ""
-        self._fh: object | None = None
+        self._fh: Any = None
 
     def finish_early(self) -> None:
         self._finish_early = True

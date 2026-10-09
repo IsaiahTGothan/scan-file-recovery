@@ -16,6 +16,8 @@ import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
+from typing import TypeVar
 
 from ..device.base import DeviceInfo
 from ..errors import (
@@ -41,6 +43,7 @@ from ..resilience import run_with_device_retry
 from ..util import format_size
 
 log = logging.getLogger("lifeboat.scan")
+T = TypeVar("T")
 
 
 @dataclass
@@ -111,7 +114,7 @@ class Scanner:
         self.options = options or ScanOptions()
 
     # ------------------------------------------------------------------ helpers
-    def _retry(self, action: Callable[[], object], doing: str) -> object:
+    def _retry(self, action: Callable[[], T], doing: str) -> T:
         return run_with_device_retry(action, self.reader, self.interventions, self.events, self.control, doing)
 
     @staticmethod
@@ -149,8 +152,7 @@ class Scanner:
         root = Node(self.info.title, F.DIR | F.VIRTUAL)
         result = ScanResult(self.info, root)
         self.progress(Progress("Reading partition table"))
-        table = self._retry(lambda: read_partition_table(self.reader), "reading the partition table")
-        assert isinstance(table, PartitionTable)
+        table = self._retry(partial(read_partition_table, self.reader), "reading the partition table")
         result.table = table
         for warning in table.warnings:
             result.warnings.append(warning)
@@ -161,8 +163,7 @@ class Scanner:
             # boot sector is damaged; probing also checks the backup copies.
             whole = PartitionEntry(index=1, start=0, size=self.reader.size, scheme="None", type_code="",
                                    type_name="Whole drive", sector_size=self.reader.sector_size)
-            found = self._retry(lambda: probe(self.reader, 0, self.reader.size), "identifying the drive")
-            assert isinstance(found, Probe)
+            found = self._retry(partial(probe, self.reader, 0, self.reader.size), "identifying the drive")
             if found.supported:
                 entries = [whole]
             else:
@@ -178,13 +179,11 @@ class Scanner:
             if entry.end > self.reader.size:
                 self.events.warning(f"{title} extends past the end of the drive.", code=E_FS_REGION_OUTSIDE)
             size = max(0, min(entry.size, self.reader.size - entry.start))
-            found = self._retry(lambda e=entry, s=size: probe(self.reader, e.start, s),
-                                f"identifying {title}")
-            assert isinstance(found, Probe)
+            found = self._retry(partial(probe, self.reader, entry.start, size), f"identifying {title}")
             vr = VolumeResult(title, entry.start, size, found, entry)
             if found.supported:
                 self.progress(Progress(f"Reading {title} ({found.kind})"))
-                self._retry(lambda vr=vr: self._load_volume(vr), f"reading {title}")
+                self._retry(partial(self._load_volume, vr), f"reading {title}")
             elif entry.type_name in ("EFI system", "Microsoft reserved", "BIOS boot") and not found.kind:
                 continue
             else:
@@ -224,13 +223,12 @@ class Scanner:
         while pos < size:
             self.control.check()
             length = min(chunk, size - pos)
-            outcome = self._retry(lambda p=pos, n=length: self.reader.read(p, n, ReadMode.FAST),
-                                  "searching the drive")
-            data = bytes(outcome.data)  # type: ignore[attr-defined]
+            outcome = self._retry(partial(self.reader.read, pos, length, ReadMode.FAST), "searching the drive")
+            data = bytes(outcome.data)
             if self.options.find_partitions:
                 self._find_boot_sectors(pos, data, candidates)
             if carver is not None:
-                self._retry(lambda p=pos, d=data: carver.feed(p, d), "searching for files")
+                self._retry(partial(carver.feed, pos, data), "searching for files")
             pos += length
             now = time.monotonic()
             if now - last > 0.3:
@@ -328,7 +326,7 @@ class Scanner:
             title = f"Lost partition at {format_size(start)}" + (" (inside another volume)" if inside else "")
             vr = VolumeResult(title, start, size, found, found_by_deep_scan=True)
             self.events.info(f"Deep scan found a {found.kind} filesystem at byte {start:,}.")
-            self._retry(lambda vr=vr: self._load_volume(vr), f"reading the {found.kind} found at {start:,}")
+            self._retry(partial(self._load_volume, vr), f"reading the {found.kind} found at {start:,}")
             if vr.root is not None:
                 result.volumes.append(vr)
                 result.root.add(vr.root)

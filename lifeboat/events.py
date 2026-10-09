@@ -15,6 +15,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from .errors import Cancelled, describe
 
@@ -96,22 +97,22 @@ class EventBus:
                 log.exception("Event subscriber failed")
 
     # Convenience helpers -------------------------------------------------------
-    def debug(self, message: str, **kw: str) -> None:
+    def debug(self, message: str, **kw: Any) -> None:
         self.emit(Event(Level.DEBUG, message, **kw))
 
-    def info(self, message: str, **kw: str) -> None:
+    def info(self, message: str, **kw: Any) -> None:
         self.emit(Event(Level.INFO, message, **kw))
 
-    def success(self, message: str, **kw: str) -> None:
+    def success(self, message: str, **kw: Any) -> None:
         self.emit(Event(Level.SUCCESS, message, **kw))
 
-    def warning(self, message: str, **kw: str) -> None:
+    def warning(self, message: str, **kw: Any) -> None:
         self.emit(Event(Level.WARNING, message, **kw))
 
-    def error(self, message: str, **kw: str) -> None:
+    def error(self, message: str, **kw: Any) -> None:
         self.emit(Event(Level.ERROR, message, **kw))
 
-    def critical(self, message: str, **kw: str) -> None:
+    def critical(self, message: str, **kw: Any) -> None:
         self.emit(Event(Level.CRITICAL, message, **kw))
 
 

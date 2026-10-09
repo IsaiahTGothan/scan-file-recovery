@@ -94,12 +94,24 @@ def main(argv: list[str] | None = None) -> int:
                      exc_info=(args.exc_type, args.exc_value, args.exc_traceback))  # type: ignore[arg-type]
 
     threading.excepthook = thread_hook
-    if _ask_for_admin(app):
+    args = sys.argv[1:] if argv is None else argv[1:]
+    smoke = "--smoke-test" in args
+    if not smoke and _ask_for_admin(app):
         return 0
     from .main_window import MainWindow
 
     window = MainWindow()
     window.show()
+    if smoke:
+        # Packaging check: build the whole window, run the event loop briefly, quit.
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(2500, window.close)
+        QTimer.singleShot(3000, app.quit)
+        code = app.exec()
+        log.info("Smoke test finished (exit %s)", code)
+        print("Lifeboat smoke test OK")
+        return code
     return app.exec()
 
 

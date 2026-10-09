@@ -595,8 +595,9 @@ def beep(kind: str) -> None:
     try:
         import winsound
 
-        flag = {"error": winsound.MB_ICONHAND, "warning": winsound.MB_ICONEXCLAMATION}.get(kind, winsound.MB_OK)
-        winsound.MessageBeep(flag)
+        flag = {"error": winsound.MB_ICONHAND,  # type: ignore[attr-defined]
+                "warning": winsound.MB_ICONEXCLAMATION}.get(kind, winsound.MB_OK)  # type: ignore[attr-defined]
+        winsound.MessageBeep(flag)  # type: ignore[attr-defined]
     except (ImportError, RuntimeError):
         QApplication.beep()
 
