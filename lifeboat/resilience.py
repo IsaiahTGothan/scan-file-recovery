@@ -56,16 +56,21 @@ def run_with_device_retry(
                 f"The source drive disconnected while {doing}. Reconnect it to continue.",
                 code=E_SOURCE_GONE, details=str(exc),
             )
-            choice = handler.request(Intervention(
-                code=E_SOURCE_GONE,
-                title="Source drive disconnected",
-                message=(f"The drive stopped answering while {doing}. Reconnect it (try another "
-                         "USB port or cable). Lifeboat resumes automatically when it is back."),
-                options=(Choice.RETRY, Choice.ABORT),
-                auto_retry=lambda: try_reattach(reader),
-            ))
-            if choice is not Choice.RETRY or not try_reattach(reader):
-                raise Cancelled("Stopped because the source drive disconnected.") from exc
+            while True:
+                choice = handler.request(Intervention(
+                    code=E_SOURCE_GONE,
+                    title="Source drive disconnected",
+                    message=(f"The drive stopped answering while {doing}. Reconnect it (try another "
+                             "USB port or cable). Lifeboat resumes automatically when it is back."),
+                    options=(Choice.RETRY, Choice.ABORT),
+                    auto_retry=lambda: try_reattach(reader),
+                ))
+                if choice is not Choice.RETRY:
+                    raise Cancelled("Stopped because the source drive disconnected.") from exc
+                if try_reattach(reader):
+                    break
+                # Retry pressed before Windows has the drive back: ask again, don't give up.
+                events.warning("The source drive is still not connected.", code=E_SOURCE_GONE)
             events.success("The source drive is back. Continuing where Lifeboat stopped.")
         except DeviceHungError as exc:
             events.critical(

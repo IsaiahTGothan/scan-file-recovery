@@ -196,6 +196,32 @@ def test_recovery_survives_source_disconnect(images, tmp_path):
     assert all(t.status == Status.OK for t in summary.tasks), [t.message for t in summary.tasks if t.message]
 
 
+class ImpatientUser(InterventionHandler):
+    """Presses Retry before the drive is back, then plugs it in and presses Retry again."""
+
+    def __init__(self, device):
+        super().__init__()
+        self.device = device
+
+    def request(self, intervention):
+        self.history.append(intervention)
+        if len(self.history) >= 2:
+            self.device.reconnect()
+        return Choice.RETRY
+
+
+def test_retry_pressed_before_the_drive_is_back_asks_again(images, tmp_path):
+    dev = SimulatedFailingDevice(ImageDevice(image_path("exfat")), FaultPlan())
+    reader, info, result, events = scan_device(dev)
+    files = all_files(result.root)
+    dev.plan.disconnect_after_reads = dev.reads + 15
+    handler = ImpatientUser(dev)
+    job, summary = run_job(files, reader, info, tmp_path, handler=handler, events=events)
+    assert len(handler.history) == 2
+    assert not summary.cancelled
+    assert all(t.status == Status.OK for t in summary.tasks), [t.message for t in summary.tasks if t.message]
+
+
 def test_destination_on_source_disk_is_refused(tmp_path):
     from lifeboat.recover.destination import disks_for_path
 

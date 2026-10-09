@@ -37,8 +37,48 @@ def _wait(app, window, timeout=60):
     assert window.job is None, "job did not finish"
 
 
-def test_window_scan_select_recover(app, images, tmp_path, monkeypatch):
+def _fake_dialogs(monkeypatch, destination):
+    """Answer the recovery dialogs without showing them; record any error dialog."""
+    import lifeboat.ui.main_window as mw
     from lifeboat.ui import dialogs
+
+    class FakeDialog:
+        DialogCode = dialogs.RecoverDialog.DialogCode
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return dialogs.RecoverDialog.DialogCode.Accepted
+
+        def values(self):
+            return {"destination": str(destination), "job_folder": True, "verify": True,
+                    "thoroughness": "standard", "preserve_times": True, "mark_damaged": False, "resume": False}
+
+    class FakeSummary:
+        def __init__(self, parent, summary):
+            self.summary = summary
+            self.show_problems = False
+
+        def exec(self):
+            return 1
+
+    error_dialogs = []
+
+    class FakeError:
+        def __init__(self, *args, **kwargs):
+            error_dialogs.append(args)
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(mw, "RecoverDialog", FakeDialog)
+    monkeypatch.setattr(mw, "SummaryDialog", FakeSummary)
+    monkeypatch.setattr(mw, "ErrorDialog", FakeError)
+    return error_dialogs
+
+
+def test_window_scan_select_recover(app, images, tmp_path, monkeypatch):
     from lifeboat.ui.main_window import MainWindow
 
     window = MainWindow()
@@ -65,31 +105,7 @@ def test_window_scan_select_recover(app, images, tmp_path, monkeypatch):
     window.search.setText("")
     window._apply_filter()
 
-    class FakeDialog:
-        DialogCode = dialogs.RecoverDialog.DialogCode
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def exec(self):
-            return dialogs.RecoverDialog.DialogCode.Accepted
-
-        def values(self):
-            return {"destination": str(tmp_path), "job_folder": True, "verify": True,
-                    "thoroughness": "standard", "preserve_times": True, "mark_damaged": False, "resume": False}
-
-    class FakeSummary:
-        def __init__(self, parent, summary):
-            self.summary = summary
-            self.show_problems = False
-
-        def exec(self):
-            return 1
-
-    import lifeboat.ui.main_window as mw
-
-    monkeypatch.setattr(mw, "RecoverDialog", FakeDialog)
-    monkeypatch.setattr(mw, "SummaryDialog", FakeSummary)
+    error_dialogs = _fake_dialogs(monkeypatch, tmp_path)
     window.recover()
     _wait(app, window)
     _pump(app)
@@ -101,6 +117,144 @@ def test_window_scan_select_recover(app, images, tmp_path, monkeypatch):
     assert window.results_model.rowCount() == 2
     # every event reached the activity log
     assert any("Recovery finished" in e.message for e in window.activity_model.events)
+    assert not error_dialogs
+    window.close()
+
+
+def test_failing_drive_problems_are_visible(app, images, tmp_path, monkeypatch):
+    """Bad sectors, and a drive that drops off USB in the middle of a recovery.
+
+    Every notification channel must fire (pop-ups, the red banner, the Problems tab and
+    its badge), the job must continue by itself once the drive is back, the damaged file
+    must be reported with its exact unreadable range, and nothing may raise.
+    """
+    import sys
+
+    import lifeboat.ui.main_window as mw
+    from lifeboat.device.image import ImageDevice
+    from lifeboat.device.simulated import FaultPlan, SimulatedFailingDevice
+    from lifeboat.recover import Status
+
+    unhandled = []
+    monkeypatch.setattr(sys, "excepthook", lambda kind, value, tb: unhandled.append(value))
+    error_dialogs = _fake_dialogs(monkeypatch, tmp_path)
+    path = str(image_path("exfat"))
+    dev = SimulatedFailingDevice(ImageDevice(path), FaultPlan())
+    window = mw.MainWindow()
+    window._open = lambda info: dev
+    toasts = []
+    show = window.toasts.show
+
+    def record(level, title, message="", timeout_ms=None):
+        toasts.append((level, title, message))
+        show(level, title, message, timeout_ms)
+
+    window.toasts.show = record
+    window.show()
+    _pump(app)
+    info = DeviceInfo(path=path, kind="image", size=os.path.getsize(path), model="Disk image")
+    window.images.append(info)
+    window.select_source(info)
+    window.quick_scan()
+    _wait(app, window)
+    root = window.result.volumes[0].root
+    video = root.child("DCIM").child("100MEDIA").child("DJI_0001.MP4")
+    extent = video.volume.layout(video).extents[0]
+    assert extent.length > (1 << 20) + 4096
+    bad_at = extent.disk_offset + (1 << 20)
+    dev.plan.bad = [(bad_at, bad_at + 4096)]
+    window.selection.toggle(video, True)
+    window.selection.toggle(root.child("many"), True)
+    count = window.selection.count
+    problems_before = window.problems_model.rowCount()
+    dev.plan.disconnect_after_reads = dev.reads + 12
+
+    window.recover()
+    banner = None
+    end = time.time() + 120
+    while window.job is not None and time.time() < end:
+        _pump(app, 0.05)
+        if banner is None and window.banner.pending is not None:
+            banner = (window.banner.isVisible(), window.banner.title.text(), window.banner.message.text())
+            dev.reconnect()  # plug the drive back in: the job must notice by itself
+    assert window.job is None, "recovery did not finish"
+    _pump(app)
+
+    # The red banner asked for the drive, then went away on its own.
+    assert banner is not None, "no banner for the disconnected drive"
+    visible, title, message = banner
+    assert visible and "disconnected" in title.lower() and "LB-120" in message
+    assert not window.banner.isVisible()
+    assert any(t[1] == "Continuing" for t in toasts)
+    # Problems tab, badge and pop-ups.
+    codes = [e.code for e in window.problems_model.events[problems_before:]]
+    assert "LB-120" in codes and "LB-110" in codes
+    assert window.tabs.tabText(1).startswith("Problems (")
+    assert "problem" in window.problem_badge.text()
+    assert any(level == "critical" and "disconnected" in title.lower() for level, title, _m in toasts)
+    assert any(title == "Recovery finished with problems" for _l, title, _m in toasts)
+    # The result: one damaged file with exactly the bad 4 KiB, everything else intact.
+    summary = window.last_summary
+    assert summary is not None and summary.outcome == "warning"
+    assert len(summary.tasks) == count
+    damaged = [t for t in summary.tasks if t.status != Status.OK]
+    assert [t.node for t in damaged] == [video]
+    assert damaged[0].status == Status.PARTIAL
+    assert damaged[0].damaged_ranges() == [(1 << 20, (1 << 20) + 4096)]
+    window.results_model.set_mode("problems")
+    assert window.results_model.rowCount() == 1
+    assert not error_dialogs, error_dialogs
+    assert not unhandled, unhandled
+    window.close()
+
+
+def test_toast_closed_early_does_not_raise(app, monkeypatch):
+    """A pop-up closed (by the user or a newer pop-up) before it expires must not crash later."""
+    import sys
+
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    from lifeboat.ui.widgets import ToastArea
+
+    unhandled = []
+    monkeypatch.setattr(sys, "excepthook", lambda kind, value, tb: unhandled.append(value))
+    host = QtWidgets.QWidget()
+    host.resize(800, 600)
+    host.show()
+    area = ToastArea(host)
+    area.show("info", "closed by the user", timeout_ms=150)
+    area.clear()
+    for i in range(ToastArea.MAX + 3):
+        area.show("warning", f"burst {i}", timeout_ms=100)
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    _pump(app, 0.5)
+    assert not unhandled, unhandled
+    assert area.toasts == []
+    host.close()
+
+
+def test_problem_bursts_are_summarised(app, monkeypatch):
+    """Hundreds of errors in a burst give a few pop-ups, but every one reaches the Problems tab."""
+    import lifeboat.ui.main_window as mw
+    from lifeboat.events import Event, Level
+
+    monkeypatch.setattr(mw.MainWindow, "TOAST_GAP_ERROR", 0.3)
+    window = mw.MainWindow()
+    toasts = []
+    show = window.toasts.show
+    window.toasts.show = lambda level, title, message="", timeout_ms=None: (
+        toasts.append((level, title, message)), show(level, title, message, timeout_ms))
+    window.show()
+    _pump(app)
+    before = window.problems_model.rowCount()
+    toasts.clear()
+    for i in range(300):
+        window.bus.emit(Event(Level.ERROR, f"Not recovered: file {i}", code="LB-402"))
+    _pump(app, 1.0)
+    assert window.problems_model.rowCount() - before == 300
+    assert 1 <= len(toasts) <= 4, toasts
+    assert toasts[0][:3] == ("error", "File could not be recovered", "Not recovered: file 0")
+    assert toasts[-1][1] == "299 more problems"
     window.close()
 
 

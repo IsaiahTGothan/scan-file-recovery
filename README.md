@@ -132,7 +132,7 @@ lifeboat-cli image \\.\PhysicalDrive2 E:\drive2.img
 lifeboat-cli recover E:\drive2.img D:\Recovered --deleted-only
 ```
 
-Exit codes: `0` everything recovered, `1` finished with damaged or failed files, `2` failed, `130` stopped with Ctrl+C.
+Exit codes: `0` everything recovered, `1` finished with damaged or failed files, `2` failed (including no matching files), `3` bad arguments, `130` stopped with Ctrl+C.
 
 ## Adding the owner logo
 

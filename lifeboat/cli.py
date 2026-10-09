@@ -8,7 +8,7 @@ Examples::
     lifeboat-cli image \\\\.\\PhysicalDrive2 E:\\disk2.img
 
 Exit codes: 0 everything recovered, 1 finished with damaged/failed files,
-2 failed, 3 bad arguments, 130 stopped with Ctrl+C.
+2 failed (including "no files match"), 3 bad arguments, 130 stopped with Ctrl+C.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ import os
 import signal
 import sys
 import time
+from typing import NoReturn
 
 from . import __version__
 from .branding import APP_FULL_NAME
@@ -202,8 +203,8 @@ def cmd_recover(args: argparse.Namespace) -> int:
     info, reader, bus, result = _scan(args, control, console)
     files = [n for n in result.root.walk() if n.children is None and _match(n, args)]
     if not files:
-        print("No files match.", file=sys.stderr)
-        return 1
+        print("ERROR: no files match.", file=sys.stderr)
+        return 2
     size = sum(n.size for n in files)
     report = check_destination(args.destination, info, size, max(n.size for n in files),
                                sum(1 for n in files if n.size > (4 << 30) - 1), allow_low_space=args.allow_low_space)
@@ -251,8 +252,16 @@ def cmd_image(args: argparse.Namespace) -> int:
     return 0 if summary.outcome == "success" else 1
 
 
+class _Parser(argparse.ArgumentParser):
+    """Exit with 3 on bad arguments so scripts can tell them from a failed recovery (2)."""
+
+    def error(self, message: str) -> NoReturn:
+        self.print_usage(sys.stderr)
+        self.exit(3, f"{self.prog}: error: {message}\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="lifeboat-cli", description=f"{APP_FULL_NAME} {__version__}")
+    parser = _Parser(prog="lifeboat-cli", description=f"{APP_FULL_NAME} {__version__}")
     parser.add_argument("--version", action="version", version=f"{APP_FULL_NAME} {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 

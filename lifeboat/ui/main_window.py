@@ -106,6 +106,9 @@ def _tool(text: str, icon_name: str, tip: str) -> QToolButton:
 
 
 class MainWindow(QMainWindow):
+    TOAST_GAP_ERROR = 2.0    # seconds between pop-ups; problems in between are summarised
+    TOAST_GAP_WARNING = 4.0
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_FULL_NAME)
@@ -129,10 +132,15 @@ class MainWindow(QMainWindow):
         self.open_error: LifeboatError | None = None
         self._problem_count = 0
         self._last_toast = 0.0
+        self._held_warnings = 0  # problems that arrived too fast for a pop-up each
+        self._held_errors = 0
         self._enum_running = False
         self._build()
         self._connect()
         self.toasts = ToastArea(self.centralWidget())
+        self._toast_timer = QTimer(self)
+        self._toast_timer.setSingleShot(True)
+        self._toast_timer.timeout.connect(self._flush_held_toasts)
         self.tray = QSystemTrayIcon(icons.app_icon(), self)
         self.tray.setToolTip(APP_FULL_NAME)
         if QSystemTrayIcon.isSystemTrayAvailable():
@@ -1097,13 +1105,34 @@ class MainWindow(QMainWindow):
             self.problem_badge.setStyleSheet(f"color:{colour}; font-weight:600;")
             self.tabs.setTabText(1, f"Problems ({self._problem_count:,})")
             self.tabs.tabBar().setTabTextColor(1, QColor(colour))
-        now = time.monotonic()
-        if event.level >= Level.ERROR or (event.level == Level.WARNING and now - self._last_toast > 4):
-            self._last_toast = now
-            self.toasts.show(toast_level(event), event.title or event.message,
-                             event.message if event.title else event.hint)
+        if event.level >= Level.WARNING:
+            # One pop-up per problem, unless they arrive in a burst (a dying drive can fail
+            # thousands of files): then the rest are counted into one "N more problems" pop-up.
+            now = time.monotonic()
+            gap = self.TOAST_GAP_ERROR if event.level >= Level.ERROR else self.TOAST_GAP_WARNING
+            if event.level == Level.CRITICAL or now - self._last_toast >= gap:
+                self._last_toast = now
+                self.toasts.show(toast_level(event), event.title or event.message,
+                                 event.message if event.title else event.hint)
+            else:
+                if event.level >= Level.ERROR:
+                    self._held_errors += 1
+                else:
+                    self._held_warnings += 1
+                if not self._toast_timer.isActive():
+                    self._toast_timer.start(int(gap * 1000))
         if event.level == Level.CRITICAL:
             self._attention("error")
+
+    def _flush_held_toasts(self) -> None:
+        count = self._held_errors + self._held_warnings
+        if not count:
+            return
+        level = "error" if self._held_errors else "warning"
+        self._held_errors = self._held_warnings = 0
+        self._last_toast = time.monotonic()
+        self.toasts.show(level, f"{count:,} more problem{'s' if count != 1 else ''}",
+                         "Open the Problems tab below for the details of each one.")
 
     def _notify(self, level: str, title: str, message: str) -> None:
         self.toasts.show(level, title, message)

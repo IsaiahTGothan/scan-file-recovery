@@ -318,11 +318,16 @@ class Toast(QFrame):
         layout.addWidget(close, 0, Qt.AlignmentFlag.AlignTop)
         self.setFixedWidth(380)
         if timeout_ms > 0:
-            QTimer.singleShot(timeout_ms, lambda: self.closed.emit(self))
+            # Owned by the toast, so it dies with it: a free-standing single-shot timer would
+            # fire after the user (or a newer toast) closed this one and touch a deleted widget.
+            self._expiry = QTimer(self)
+            self._expiry.setSingleShot(True)
+            self._expiry.timeout.connect(lambda: self.closed.emit(self))
+            self._expiry.start(timeout_ms)
 
 
 class ToastArea(QObject):
-    """Stacks toasts in the top-right corner of a window."""
+    """Stacks toasts in the bottom-right corner of a window."""
 
     MAX = 4
 
