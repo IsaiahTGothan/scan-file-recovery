@@ -240,10 +240,19 @@ def cmd_verify_api() -> None:
             super()._prepare()
             self._sync_each_file = True
 
-    dest2 = WORK / "out-flush-each-file"
-    shutil.rmtree(dest2, ignore_errors=True)
-    timed = FlushEachFile(files, reader, device.info, RecoveryOptions(destination=str(dest2), job_folder=False))
-    print(f"for comparison, with a flush per file: {timed.run().seconds:.2f} s", flush=True)
+    # Fair timing: alternate the two ways, each with a cold read cache and a fresh folder.
+    timings: dict[str, list[float]] = {"no flush per file": [], "flush per file": []}
+    for round_number in range(3):
+        for label, cls in (("no flush per file", RecoveryJob), ("flush per file", FlushEachFile)):
+            reader.cache.clear()
+            target = WORK / f"timing-{round_number}-{label.replace(' ', '-')}"
+            shutil.rmtree(target, ignore_errors=True)
+            timed = cls(files, reader, device.info, RecoveryOptions(destination=str(target), job_folder=False))
+            timings[label].append(timed.run().seconds)
+            shutil.rmtree(target, ignore_errors=True)
+    for label, values in timings.items():
+        print(f"timing, {label}: " + ", ".join(f"{v:.2f} s" for v in values)
+              + f" (median {sorted(values)[1]:.2f} s)", flush=True)
     device.close()
     # Reading through the volume (drive letter) works too.
     if state["letter"]:
