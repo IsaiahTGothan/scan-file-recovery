@@ -46,6 +46,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["PLR", "B", "SIM", "RUF", "BLE"]
+"lifeboat/recover/report.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

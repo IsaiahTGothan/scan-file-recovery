@@ -49,7 +49,7 @@ def _open(path: str, unbuffered: bool) -> int:
     return int(handle)
 
 
-def _read_blocks(path: str, start: int, length: int | None):  # noqa: ANN202
+def _read_blocks(path: str, start: int, length: int | None):
     """Yield the file's bytes from aligned ``start`` (to EOF when ``length`` is None)."""
     try:
         handle = _open(path, True)
