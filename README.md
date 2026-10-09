@@ -63,6 +63,7 @@ You can **Pause**, **Stop** (everything recovered so far is kept) or **Finish no
 
 * **If Windows offers to format the drive or "scan and fix" it, click Cancel.** Both write to the drive and can destroy what's left.
 * **Clicking, beeping, very slow, or keeps disconnecting? Make a disk image first.** **Create image** copies the whole drive to a file on a healthy drive (it needs as much free space as the failing drive's size). The healthy areas are copied first. The progress map (`.map`, compatible with GNU ddrescue) means you can stop and resume. Then open the image with **Open image** and recover from it without touching the failing drive again. Files recovered from the image are still marked Damaged wherever the drive couldn't be read.
+  The map records which drive the image belongs to. Lifeboat continues an image only for that drive and never overwrites an existing file that has no map (LB-309). If you moved the same drive to another USB adapter and it now reports a different serial number, tick **It is this same drive** (command line: `--same-drive`) to continue.
 * **Keep File Explorer, antivirus scans and backup software away from the failing drive** while Lifeboat works. They compete for the same weak heads.
 * **USB adapters matter.** If a drive keeps dropping off or shows the wrong size, try another cable, port or adapter. Lifeboat detects when an enclosure used 4 KB sectors and the dock shows 512-byte sectors (or the reverse) and adjusts automatically.
 * **A drive that doesn't spin up or isn't detected at all** has a hardware fault (PCB, heads, motor). No software can read it; it needs a clean-room lab.
@@ -103,6 +104,7 @@ Lifeboat makes problems impossible to miss:
 | LB-302 / LB-303 / LB-304 | Not enough space / destination full / destination gone |
 | LB-305 | File of 4 GB or more for a FAT32 destination |
 | LB-306 / LB-307 | Write error / verification mismatch on the destination |
+| LB-308 / LB-309 | Destination folder not writable / an image file of that name already exists (never overwritten) |
 | LB-401 / LB-402 | File recovered with unreadable parts / not recoverable |
 | LB-403 / LB-404 / LB-405 | EFS-encrypted / space reused / unsupported storage format |
 | LB-500 | Unexpected internal error (Lifeboat keeps running; please keep the log) |
