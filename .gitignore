@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Build output
+build/
+dist/
+*.spec.bak
+
+# Test images (rebuilt automatically by tests/fixtures/build_images.py)
+tests/.images/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
