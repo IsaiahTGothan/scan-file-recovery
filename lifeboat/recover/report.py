@@ -136,7 +136,7 @@ table {{ width:100%; border-collapse:collapse; background:var(--card); border:1p
 th, td {{ text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }}
 th {{ font-size:12px; color:var(--muted); font-weight:600; }}
 .path {{ word-break:break-all; }} .num {{ white-space:nowrap; text-align:right; }}
-.mono {{ font-family:Consolas, monospace; font-size:12px; }}
+.mono {{ font-family:Consolas, monospace; font-size:12px; white-space:nowrap; }}
 .pill {{ display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; font-weight:600; white-space:nowrap; }}
 .pill.ok {{ background:var(--okbg); color:var(--ok); }} .pill.warn {{ background:var(--warnbg); color:var(--warn); }}
 .pill.bad {{ background:var(--badbg); color:var(--bad); }} .pill.muted {{ background:var(--line); color:var(--muted); }}

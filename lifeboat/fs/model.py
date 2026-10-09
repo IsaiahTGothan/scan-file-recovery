@@ -41,7 +41,7 @@ class Node:
     __slots__ = (
         "name", "parent", "children", "flags", "size",
         "ctime", "mtime", "atime", "volume", "ref",
-        "check", "sel_bytes", "sel_count",
+        "check", "sel_count", "total",
     )
 
     def __init__(
@@ -65,9 +65,9 @@ class Node:
         self.atime = atime
         self.volume = volume
         self.ref = ref
-        self.check = 0          # 0 unchecked, 1 partially, 2 checked
-        self.sel_bytes = 0
-        self.sel_count = 0
+        self.check = 0          # files: 0 unchecked / 2 checked (folders derive theirs)
+        self.sel_count = 0      # folders: checked files below that are shown
+        self.total = 0          # folders: files below that are shown
 
     def __repr__(self) -> str:
         return f"<Node {self.path()!r} flags=0x{self.flags:x} size={self.size}>"

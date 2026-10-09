@@ -88,6 +88,14 @@ class Status:
     FAILED = "failed"
     SKIPPED = "skipped"
 
+    SHORT = {
+        PENDING: "Not processed",
+        OK: "Recovered",
+        PARTIAL: "Damaged",
+        FAILED: "Failed",
+        SKIPPED: "Not processed",
+    }
+
     LABELS = {
         PENDING: "Not started",
         OK: "Recovered",

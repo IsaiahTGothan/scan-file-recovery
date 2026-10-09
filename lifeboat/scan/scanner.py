@@ -116,11 +116,12 @@ class Scanner:
 
     @staticmethod
     def _volume_title(index_label: str, vol: Volume | None, found: Probe, size: int) -> str:
+        """Short, folder-friendly name such as "Partition 2 - Data (NTFS)"."""
         if vol is not None:
-            label = f" “{vol.label}”" if vol.label else ""
-            return f"{index_label}{label} — {vol.kind}, {format_size(size)}"
-        kind = found.kind or "Unknown"
-        return f"{index_label} — {kind}, {format_size(size)} (not readable)"
+            label = f" - {vol.label}" if vol.label else ""
+            return f"{index_label}{label} ({vol.kind})"
+        kind = found.kind or "unknown filesystem"
+        return f"{index_label} ({kind}, not readable)"
 
     def _load_volume(self, result: VolumeResult) -> None:
         found = result.probe
