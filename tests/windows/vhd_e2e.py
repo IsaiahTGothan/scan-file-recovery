@@ -226,12 +226,24 @@ def cmd_verify_api() -> None:
     shutil.rmtree(long(str(dest)), ignore_errors=True)
     job = RecoveryJob(files, reader, device.info, RecoveryOptions(destination=str(dest), job_folder=False), bus)
     summary = job.run()
-    print("summary:", summary.headline(), flush=True)
+    print("summary:", summary.headline(), f"in {summary.seconds:.2f} s", flush=True)
     bad = [t for t in summary.tasks if t.status != Status.OK and t.size]
     assert not bad, [(t.source_path, t.status, t.message) for t in bad]
     problems = _check_recovered(str(dest))
     assert not problems, problems
     assert os.path.exists(summary.report_html)
+    # Verification reads past the Windows cache here, so no flush per file is needed.
+    assert job._sync_each_file is False, "uncached verification should be available on NTFS"
+
+    class FlushEachFile(RecoveryJob):
+        def _prepare(self) -> None:
+            super()._prepare()
+            self._sync_each_file = True
+
+    dest2 = WORK / "out-flush-each-file"
+    shutil.rmtree(dest2, ignore_errors=True)
+    timed = FlushEachFile(files, reader, device.info, RecoveryOptions(destination=str(dest2), job_folder=False))
+    print(f"for comparison, with a flush per file: {timed.run().seconds:.2f} s", flush=True)
     device.close()
     # Reading through the volume (drive letter) works too.
     if state["letter"]:

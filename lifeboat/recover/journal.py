@@ -29,11 +29,18 @@ class JournalEntry:
 
 
 class Journal:
+    # Each record reaches the operating system at once (it survives Lifeboat crashing), but
+    # is forced onto the drive at most this often: a flush per file made recoveries of many
+    # small files crawl.  A power cut can lose the last second of records; resuming then
+    # simply copies those files again.
+    SYNC_INTERVAL = 1.0
+
     def __init__(self, job_dir: str) -> None:
         self.dir = os.path.join(job_dir, META_DIR)
         self.path = os.path.join(self.dir, JOURNAL)
         self._lock = threading.Lock()
         self._fh: TextIO | None = None
+        self._synced = 0.0
 
     def open(self, header: dict) -> None:
         os.makedirs(long_path(self.dir), exist_ok=True)
@@ -50,18 +57,34 @@ class Journal:
         with self._lock:
             self._fh.write(json.dumps(record, ensure_ascii=False) + "\n")
             self._fh.flush()
-            try:
-                os.fsync(self._fh.fileno())
-            except OSError:
-                pass
+            if time.monotonic() - self._synced >= self.SYNC_INTERVAL:
+                self._sync()
+
+    def _sync(self) -> None:
+        if self._fh is None:
+            return
+        self._synced = time.monotonic()
+        try:
+            os.fsync(self._fh.fileno())
+        except OSError:
+            pass
 
     def record(self, entry: JournalEntry) -> None:
         self._write({"type": "file", **entry.__dict__})
 
     def close(self) -> None:
-        if self._fh is not None:
-            self._fh.close()
-            self._fh = None
+        with self._lock:
+            if self._fh is not None:
+                try:
+                    self._fh.flush()
+                except OSError:
+                    pass
+                self._sync()
+                try:
+                    self._fh.close()
+                except OSError:
+                    pass
+                self._fh = None
 
     @staticmethod
     def load(job_dir: str) -> tuple[dict | None, dict[str, JournalEntry]]:

@@ -98,3 +98,24 @@ def read_unbuffered(path: str, offset: int, length: int) -> bytes:
     lead = offset - start
     data = b"".join(_read_blocks(path, start, lead + length))
     return data[lead:lead + length]
+
+
+def reads_unbuffered(path: str) -> bool:
+    """True when ``path`` (and so its volume) can be read past the Windows file cache.
+
+    Such a read first makes Windows write any cached changes of the file to the drive
+    (the file system keeps cached and uncached access coherent), so verifying a file
+    this way also puts its data on the destination drive.
+    """
+    try:
+        handle = _open(path, True)
+    except OSError:
+        return False
+    buf = _VirtualAlloc(None, _ALIGN, 0x3000, 0x04)
+    try:
+        got = wintypes.DWORD(0)
+        return bool(buf) and bool(_ReadFile(handle, buf, _ALIGN, ctypes.byref(got), None))
+    finally:
+        if buf:
+            _VirtualFree(buf, 0, 0x8000)
+        _CloseHandle(handle)

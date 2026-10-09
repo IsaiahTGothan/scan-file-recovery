@@ -280,6 +280,7 @@ class RecoveryJob:
         self._dest_fat = False
         self._map_saved = time.monotonic()
         self._consecutive_write_errors = 0
+        self._sync_each_file = True
         self._throttle = Throttle(0.25)
         self._meter = RateMeter()
         self._done_bytes = 0
@@ -383,6 +384,13 @@ class RecoveryJob:
             self._apply_resume()
         self.journal.open({"source": self.source.identity, "source_name": self.source.title,
                            "files": len(self.tasks)})
+        if sys.platform == "win32" and opts.verify:
+            # Verification reads every file back past the Windows cache, which first writes the
+            # file's data to the destination drive; flushing each file as well would only add a
+            # slow drive-cache flush per file. (The journal's periodic flush makes it all durable.)
+            from .winverify import reads_unbuffered
+
+            self._sync_each_file = not reads_unbuffered(long_path(self.journal.path))
         self.events.info(
             f"Recovering {len(self.tasks):,} files ({format_size(sum(t.size for t in self.tasks))}) "
             f"to {self.job_dir}")
@@ -610,7 +618,8 @@ class RecoveryJob:
                 self._report_progress(task.source_path, index, count)
                 pos = end
             out.flush()
-            os.fsync(out.fileno())
+            if self._sync_each_file:
+                os.fsync(out.fileno())
         return digest.hexdigest(), states
 
     def _discard_part(self, task: FileTask) -> None:
@@ -654,7 +663,8 @@ class RecoveryJob:
                             self._report_progress(task.source_path, index, count)
                             pos = stop
                     out.flush()
-                    os.fsync(out.fileno())
+                    if self._sync_each_file:
+                        os.fsync(out.fileno())
                 break
             except OSError as exc:
                 if self._handle_dest_error(task, exc):

@@ -385,3 +385,21 @@ def test_unique_job_folders(tmp_path):
     _, a = run_job([node], reader, info, tmp_path / "d", job_name="Job")
     _, b = run_job([node], reader, info, tmp_path / "d", job_name="Job")
     assert a.job_dir != b.job_dir
+
+
+def test_journal_flushes_in_batches(tmp_path, monkeypatch):
+    """One drive flush per file made big recoveries crawl; records still all survive."""
+    from lifeboat.recover import journal as jmod
+
+    calls = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(jmod.os, "fsync", lambda fd: (calls.append(fd), real_fsync(fd)))
+    journal = jmod.Journal(str(tmp_path))
+    journal.open({"source": "disk"})
+    for i in range(500):
+        journal.record(jmod.JournalEntry(f"k{i}", f"f{i}.txt", Status.OK, i, "ab" * 32, [], []))
+    journal.close()
+    assert 1 <= len(calls) <= 3, len(calls)  # the header, maybe one more, and the close
+    header, entries = jmod.Journal.load(str(tmp_path))
+    assert header is not None and header["source"] == "disk"
+    assert len(entries) == 500 and entries["k499"].size == 499
