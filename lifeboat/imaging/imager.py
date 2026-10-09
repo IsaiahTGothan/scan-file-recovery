@@ -92,6 +92,16 @@ class ExistingImage:
         return self.kind in ("conflict", "other-drive")
 
 
+def _describe_identity(identity: str) -> str:
+    """"disk|WDC WD10EZEX|WD-WCC6Y0AAA111|1000204886016" -> "WDC WD10EZEX, serial WD-WCC6Y0AAA111"."""
+    kind, *parts = identity.split("|")
+    if kind != "disk" or not parts:
+        return parts[0] if parts else identity
+    model = parts[0] or "unknown model"
+    serial = parts[1] if len(parts) == 3 and not parts[1].isdigit() else ""
+    return f"{model}, serial {serial}" if serial else model
+
+
 def inspect_existing_image(output: str, map_path: str, source: DeviceInfo, size: int) -> ExistingImage:
     output_exists = os.path.exists(long_path(output))
     map_exists = os.path.exists(long_path(map_path))
@@ -116,9 +126,8 @@ def inspect_existing_image(output: str, map_path: str, source: DeviceInfo, size:
                                          f"{format_size(size)}). Choose a new file name.")
     rescued = previous.totals()[State.GOOD]
     if previous.source and previous.source != ascii_text(source.identity):
-        _kind, *parts = previous.source.split("|")
         return ExistingImage("other-drive", f"The existing image was made from a different drive "
-                                            f"({' '.join(p for p in parts[:2] if p)}). Choose a new file name, or "
+                                            f"({_describe_identity(previous.source)}). Choose a new file name, or "
                                             "confirm that it is this same drive (for example in another USB "
                                             "adapter) to continue it.", rescued)
     note = "" if previous.source else (" Its progress file does not say which drive it is from (it may come from "
