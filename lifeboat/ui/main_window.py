@@ -135,6 +135,7 @@ class MainWindow(QMainWindow):
         self._held_warnings = 0  # problems that arrived too fast for a pop-up each
         self._held_errors = 0
         self._enum_running = False
+        self._selecting = False
         self._build()
         self._connect()
         self.toasts = ToastArea(self.centralWidget())
@@ -652,6 +653,15 @@ class MainWindow(QMainWindow):
                              "Restart it as administrator (right-click > Run as administrator), or open a disk image.")
 
     def select_source(self, info: DeviceInfo) -> None:
+        if self._selecting:
+            return
+        self._selecting = True
+        try:
+            self._select_source(info)
+        finally:
+            self._selecting = False
+
+    def _select_source(self, info: DeviceInfo) -> None:
         if self.job is not None:
             self.toasts.show("warning", "A job is running", "Stop it before switching to another source.")
             if self.info is not None:

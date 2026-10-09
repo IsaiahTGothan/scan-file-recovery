@@ -167,9 +167,12 @@ class SourceList(QListWidget):
                 self.addItem(item)
                 if keep and info.identity == keep:
                     reselect = item
-        self.blockSignals(False)
         if reselect is not None:
+            # Highlighting the current source again is not the user choosing a source: with
+            # signals on, it re-entered select_source, which (while a job runs) refreshed this
+            # list again - endlessly, until the app crashed.
             self.setCurrentItem(reselect)
+        self.blockSignals(False)
 
 
 # --------------------------------------------------------------------- disk map

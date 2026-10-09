@@ -481,3 +481,46 @@ def test_deep_scan_from_the_window(app, tmp_path, monkeypatch):
     assert len(carved) == 1 and carved[0].size == len(photo)
     assert window.pages.currentIndex() == 2
     window.close()
+
+
+def test_source_list_changes_during_a_job_do_not_loop(app, tmp_path, monkeypatch):
+    """While a job runs: a refreshed drive list or a click on another drive must neither switch
+    the source nor re-enter select_source endlessly (that crashed the app mid-recovery)."""
+    import sys
+    from types import SimpleNamespace
+
+    import lifeboat.ui.main_window as mw
+    from lifeboat.ui.widgets import ROLE_INFO
+
+    unhandled = []
+    monkeypatch.setattr(sys, "excepthook", lambda kind, value, tb: unhandled.append(value))
+    image = tmp_path / "a.img"
+    image.write_bytes(bytes(1 << 20))
+    window = mw.MainWindow()
+    window.show()
+    info = DeviceInfo(path=str(image), kind="image", size=1 << 20, model="Disk image")
+    window.images.append(info)
+    window.sources.set_devices(window.devices + window.images, info.identity)
+    window.select_source(info)
+    assert window.info is info
+    calls = []
+    original = window._select_source
+    window._select_source = lambda i: (calls.append(i), original(i))
+    window.job = SimpleNamespace(kind="recover")  # a recovery is running
+    try:
+        # A new drive appears (the drive list refreshes while the job runs).
+        disk = DeviceInfo(path=r"\\.\PhysicalDrive8", kind="disk", size=1 << 30, model="New drive", serial="N1")
+        window._devices_ready([disk])
+        assert calls == []  # re-highlighting the current source is not a selection
+        # The user clicks the new drive.
+        row = next(r for r in range(window.sources.count()) if window.sources.item(r).data(ROLE_INFO) is disk)
+        window.sources.setCurrentRow(row)
+        _pump(app, 0.1)
+        assert len(calls) == 1 and calls[0] is disk  # asked once, refused once
+        assert window.info is info  # still recovering from the same source
+        current = window.sources.currentItem().data(ROLE_INFO)
+        assert current is info  # the list shows the source being recovered again
+    finally:
+        window.job = None
+    assert not unhandled, unhandled
+    window.close()
