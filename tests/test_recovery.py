@@ -373,6 +373,31 @@ def test_mark_damaged_option(images, tmp_path):
     task = summary.tasks[0]
     assert task.status == Status.PARTIAL
     assert task.dest.endswith("IMG_0001 [DAMAGED].JPG") and os.path.exists(task.dest)
+    # A file that already has the marked name is never replaced.
+    folder = os.path.dirname(task.dest)
+    dest2 = tmp_path / "again"
+    precious = dest2 / os.path.relpath(folder, job.job_dir) / "IMG_0001 [DAMAGED].JPG"
+    precious.parent.mkdir(parents=True)
+    precious.write_bytes(b"precious")
+    job2, summary2 = run_job([node], reader, info, dest2, mark_damaged=True, thoroughness="quick",
+                             job_folder=False)
+    assert precious.read_bytes() == b"precious"
+    assert summary2.tasks[0].dest.endswith("IMG_0001 [DAMAGED] (2).JPG")
+    assert os.path.exists(summary2.tasks[0].dest)
+
+
+def test_name_suffixes_respect_the_255_character_limit():
+    from lifeboat.recover.names import MAX_NAME, NameSpace, with_tag
+
+    long_name = "x" * 251 + ".jpg"
+    assert len(long_name) == MAX_NAME
+    for tag in (" (2)", " [DAMAGED]", " [DAMAGED] (12)"):
+        tagged = with_tag(long_name, tag)
+        assert len(tagged) == MAX_NAME and tagged.endswith(tag + ".jpg")
+    space = NameSpace()
+    assert space.claim("", long_name) == long_name
+    second = space.claim("", long_name.upper())
+    assert len(second) <= MAX_NAME and second.endswith(" (2).JPG") and space.taken("", second.lower())
 
 
 def test_unique_job_folders(tmp_path):
@@ -403,3 +428,29 @@ def test_journal_flushes_in_batches(tmp_path, monkeypatch):
     header, entries = jmod.Journal.load(str(tmp_path))
     assert header is not None and header["source"] == "disk"
     assert len(entries) == 500 and entries["k499"].size == 499
+
+
+def test_resume_never_uses_another_drives_job(images, tmp_path):
+    """Resuming a folder that holds a recovery of a different drive reuses nothing from it."""
+    reader, info, result, events = scan_device(ImageDevice(image_path("fat16")))
+    files = all_files(result.root)
+    control = JobControl()
+
+    def progress(p):
+        if p.items_done >= 40:
+            control.cancel()
+
+    folder = tmp_path / "job"
+    first = RecoveryJob(files, reader, info, RecoveryOptions(destination=str(folder), job_folder=False),
+                        events=events, control=control, progress=progress).run()
+    assert first.cancelled and first.count(Status.OK) > 0
+    # Same file system layout, but it is another drive.
+    reader2, _info, result2, events2 = scan_device(ImageDevice(image_path("fat16")))
+    seen = []
+    events2.subscribe(seen.append)
+    other = DeviceInfo(path=r"\\.\PhysicalDrive5", kind="disk", size=reader2.size, model="Other", serial="X1")
+    options = RecoveryOptions(destination=str(folder), job_folder=False, resume=True)
+    second = RecoveryJob(all_files(result2.root), reader2, other, options, events=events2).run()
+    assert not [t for t in second.tasks if "earlier session" in " ".join(t.notes)]
+    assert any("different drive" in e.message for e in seen)
+    assert second.count(Status.OK) == len(files)  # all copied again, next to the old files

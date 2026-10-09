@@ -51,6 +51,17 @@ def _truncate(name: str) -> str:
     return f"{stem}~{suffix}"
 
 
+def with_tag(name: str, tag: str) -> str:
+    """``name`` with ``tag`` (e.g. " (2)") before its extension, within the 255-character limit."""
+    stem, dot, ext = name.rpartition(".")
+    if not dot or not stem or len(ext) > 16:
+        stem, ext = name, ""
+    suffix = f".{ext}" if ext else ""
+    while stem and _utf16_len(f"{stem}{tag}{suffix}") > MAX_NAME:
+        stem = stem[:-1]
+    return f"{stem}{tag}{suffix}"
+
+
 class NameSpace:
     """Unique, case-insensitive names within one destination folder."""
 
@@ -81,6 +92,9 @@ class NameSpace:
                 counter += 1
         used.add(candidate.casefold())
         return candidate
+
+    def taken(self, folder: str, name: str) -> bool:
+        return name.casefold() in self._used.get(folder.casefold(), ())
 
     def reserve(self, folder: str, name: str) -> None:
         self._used.setdefault(folder.casefold(), set()).add(name.casefold())

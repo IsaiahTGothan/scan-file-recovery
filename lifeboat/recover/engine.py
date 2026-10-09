@@ -65,7 +65,7 @@ from ..resilience import run_with_device_retry
 from ..util import format_size
 from .destination import is_disk_full, is_gone, long_path, make_dirs, set_times, volume_filesystem
 from .journal import META_DIR, SOURCE_MAP, Journal, JournalEntry
-from .names import NameSpace, sanitize
+from .names import NameSpace, sanitize, with_tag
 from .preflight import FAT32_LIMIT, FAT_NAMES
 
 log = logging.getLogger("lifeboat.recover")
@@ -396,7 +396,17 @@ class RecoveryJob:
             f"to {self.job_dir}")
 
     def _apply_resume(self) -> None:
-        _header, entries = Journal.load(self.job_dir)
+        header, entries = Journal.load(self.job_dir)
+        if header is None:
+            self.events.warning("There is no unfinished recovery in this folder to resume; recovering everything.")
+            return
+        if header.get("source") != self.source.identity:
+            # Its map and its list of finished files describe another drive: using them would
+            # mark this drive's sectors bad and skip files that were never recovered from it.
+            self.events.warning(
+                f"This folder holds a recovery of a different drive ({header.get('source_name') or 'unknown'}), "
+                "so nothing from it is reused. Existing files are kept; new copies get new names.")
+            return
         map_path = os.path.join(self.job_dir, META_DIR, SOURCE_MAP)
         if os.path.exists(long_path(map_path)):
             try:
@@ -586,15 +596,13 @@ class RecoveryJob:
         if not os.path.lexists(long_path(task.dest)):
             return
         folder, name = os.path.split(task.rel_path)
-        stem, dot, ext = name.rpartition(".")
-        if not dot or not stem:
-            stem, ext = name, ""
         counter = 2
         while True:
-            candidate = f"{stem} ({counter}){'.' + ext if ext else ''}"
+            candidate = with_tag(name, f" ({counter})")
             rel = os.path.join(folder, candidate) if folder else candidate
             dest = os.path.join(self.job_dir, rel)
-            if not os.path.lexists(long_path(dest)):
+            if not self._names.taken(folder, candidate) and not os.path.lexists(long_path(dest)):
+                self._names.reserve(folder, candidate)
                 task.rel_path, task.dest = rel, dest
                 return
             counter += 1
@@ -815,16 +823,19 @@ class RecoveryJob:
             self.events.error(line)
 
     def _mark_damaged(self, task: FileTask) -> None:
-        stem, dot, ext = task.dest.rpartition(".")
-        if not dot or os.sep in ext:
-            stem, ext = task.dest, ""
-        target = f"{stem} [DAMAGED]{'.' + ext if ext else ''}"
+        folder, name = os.path.split(task.dest)
+        target = os.path.join(folder, with_tag(name, " [DAMAGED]"))
+        counter = 2
+        while os.path.lexists(long_path(target)):  # never replace another recovered file
+            target = os.path.join(folder, with_tag(name, f" [DAMAGED] ({counter})"))
+            counter += 1
         try:
-            os.replace(long_path(task.dest), long_path(target))
-            task.dest = target
-            task.rel_path = os.path.relpath(target, self.job_dir)
-        except OSError:
-            pass
+            os.rename(long_path(task.dest), long_path(target))
+        except OSError as exc:
+            log.warning("Could not mark %s as damaged: %s", task.dest, exc)
+            return
+        task.dest = target
+        task.rel_path = os.path.relpath(target, self.job_dir)
 
 
 def _replace_states(states: list[tuple[int, int, int]], start: int, end: int,
