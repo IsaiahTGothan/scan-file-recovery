@@ -10,6 +10,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
+# Keep the GUI tests away from the settings of a Lifeboat installed on the same machine.
+os.environ.setdefault("LIFEBOAT_SETTINGS_NAME", "Lifeboat tests")
 
 IMAGES = Path(os.environ.get("LIFEBOAT_TEST_IMAGES", ROOT / ".images"))
 

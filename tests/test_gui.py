@@ -281,3 +281,26 @@ def test_selection_counters(app):
     assert sel.selected_files() == [deleted]
     sel.set_filter(ViewFilter())
     assert sel.hidden_selected == 0 and sel.count == 1
+
+
+def test_recover_dialog_resume_survives_closing(app, tmp_path):
+    """The dialog's answers are read after it closes; Resume must still be on."""
+    from lifeboat.recover.journal import Journal
+    from lifeboat.ui.dialogs import RecoverDialog
+
+    info = DeviceInfo(path=str(tmp_path / "disk.img"), kind="image", size=1 << 20, model="Disk image")
+    job = tmp_path / "Lifeboat Recovery 2026-01-01 10.00"
+    journal = Journal(str(job))
+    journal.open({"source": info.identity, "source_name": info.title, "files": 3})
+    journal.close()
+    dialog = RecoverDialog(None, info, 3, 3000, 0, 0, 1000)
+    dialog.dest.setText(str(job))
+    dialog._validate()
+    assert dialog.resume_info is not None and dialog.resume.isChecked()
+    dialog.show()
+    dialog._accept()  # closes the dialog, as clicking "Start recovery" does
+    assert not dialog.isVisible()
+    values = dialog.values()
+    assert values["resume"] is True
+    assert values["job_folder"] is False  # resume in place, not in a new folder inside the old one
+    assert values["destination"] == str(job)

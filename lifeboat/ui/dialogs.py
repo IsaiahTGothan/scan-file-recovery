@@ -41,7 +41,7 @@ from .theme import current
 from .widgets import StatCard
 
 ORG = "Zays"
-APP = "Lifeboat"
+APP = os.environ.get("LIFEBOAT_SETTINGS_NAME", "Lifeboat")  # the test-suite uses its own settings
 
 
 def settings() -> QSettings:
@@ -294,7 +294,8 @@ class RecoverDialog(QDialog):
         self.accept()
 
     def values(self) -> dict:
-        resume = self.resume.isVisible() and self.resume.isChecked()
+        # Not isVisible(): this is read after the dialog has closed, when no child is visible.
+        resume = self.resume_info is not None and self.resume.isChecked()
         return {
             "destination": self.dest.text().strip(),
             "job_folder": self.job_folder.isChecked() and not resume,
