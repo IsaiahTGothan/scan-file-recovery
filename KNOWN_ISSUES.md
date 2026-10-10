@@ -44,6 +44,10 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 ### 9. Deep scan and imaging each read the whole drive (idea)
 - **Fix:** an option to write a disk image during the deep scan, so a weak drive is read only once.
 
+### 10. A drive waking up from sleep is reported as "disconnected" (low)
+- **What happens:** external drives spin down after sitting idle. When a recovery starts, the first read gets Windows error 21 ("device not ready") while the drive spins up. Lifeboat counts that error as a disconnect, so it shows a red error and a pop-up saying "The source drive disconnected", then "The source drive is back" two seconds later. This happened on the Seagate Portable when a recovery started about 2¾ hours after the deep scan finished. Nothing was lost, and the job continued by itself.
+- **Fix:** treat "not ready" as "waking up". Wait up to about 30 seconds for the drive to answer before calling it a disconnect, and show it as an info message ("Waiting for the drive to wake up"). Also wake the drive with one read before a job starts.
+
 ## Limitations (not supported yet)
 - Owner logo from zays.us: the build environment's network policy blocks the site. Add the logo as `lifeboat/assets/owner-logo.png`.
 - Not code-signed: Windows SmartScreen warns on first run.
