@@ -261,6 +261,8 @@ def test_unknown_destination_drive_is_flagged_not_silently_allowed(tmp_path, mon
 
     monkeypatch.setattr(preflight, "disks_for_path", lambda path: set())
     monkeypatch.setattr(preflight, "is_network_path", lambda path: False)
+    # The source drive is known (named the way this system names disks); the destination's isn't.
+    monkeypatch.setattr(preflight, "disks_for_source", lambda path, kind, number: {"disk:4"})
     source = DeviceInfo(path=r"\\.\PhysicalDrive4", kind="disk", size=1 << 30, disk_number=4)
     report = check_destination(str(tmp_path / "out"), source, needed=1000)
     assert report.ok  # a warning, not a refusal

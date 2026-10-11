@@ -32,7 +32,9 @@ Lifeboat reads drives that Windows can't open anymore, shows you every file it c
 
 ## Download and install
 
-Every push to this repository builds and tests Lifeboat on Windows. To get the installer:
+Every push to this repository builds and tests Lifeboat on Windows and on Macs (Apple Silicon and Intel).
+
+### Windows
 
 1. Open the repository's **Actions** tab, then the latest successful **Build and test** run.
 2. Under **Artifacts**, download **Lifeboat-Windows**. It contains:
@@ -46,6 +48,17 @@ Pushing a version tag (for example `v1.1.0`) also publishes both files as a GitH
 Lifeboat asks for **administrator rights** when it starts (the UAC prompt). Windows only allows direct disk access to administrators. Because the app isn't code-signed yet, SmartScreen may say "Windows protected your PC". Click **More info → Run anyway**.
 
 Requirements: Windows 10 or 11, 64-bit.
+
+### Mac
+
+1. In the same **Build and test** run, download **Lifeboat-macOS-AppleSilicon** for a Mac with an Apple chip (M1 or later: Apple menu → **About This Mac** shows "Chip: Apple M…"), or **Lifeboat-macOS-Intel** for an Intel Mac.
+2. Open the `.dmg` and drag **Lifeboat** to Applications, or anywhere else: the app is self-contained, so it also runs straight from a USB stick (the `.zip` holds the same app).
+3. **First start:** the app isn't notarized by Apple yet, so macOS blocks it the first time. Open **System Settings → Privacy & Security**, scroll down to the message about Lifeboat and click **Open Anyway**. (If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/Lifeboat.app` in Terminal, then open it again.)
+4. Lifeboat offers to **restart with administrator rights**: macOS asks for your password. Only administrators may read drives directly, on a Mac too. If macOS still refuses to let Lifeboat read a drive, allow Lifeboat under **System Settings → Privacy & Security → Full Disk Access**.
+
+On a Mac, Lifeboat lists every physical drive (and attached disk images) with its name, size and connection, reads through the raw device (`/dev/rdiskN`), and has the same Drive check. The command line tool is inside the app: `sudo /Applications/Lifeboat.app/Contents/MacOS/lifeboat-cli devices`.
+
+Mac tips: if macOS says "The disk you attached was not readable by this computer", click **Ignore**, never **Initialize**, and don't run **First Aid** on a failing drive (both write to it). Spotlight starts indexing every drive you connect; on a failing drive that's a lot of extra reading, so add its volume under **System Settings → Spotlight → Search Privacy**, or keep it unmounted.
 
 ## Recovering files: the 4 steps
 
@@ -133,7 +146,7 @@ Not supported yet: browsing Mac (HFS+, APFS), Linux (ext2/3/4) and ReFS filesyst
 
 ## Command line
 
-`lifeboat-cli.exe` (installed next to `Lifeboat.exe`) runs the same engine for scripts and batch jobs. Run it from an administrator command prompt.
+`lifeboat-cli.exe` (installed next to `Lifeboat.exe`) runs the same engine for scripts and batch jobs. Run it from an administrator command prompt. On a Mac it is `Lifeboat.app/Contents/MacOS/lifeboat-cli`, run with `sudo`, and drives are named `/dev/rdisk4` instead of `\\.\PhysicalDrive2`.
 
 ```bat
 lifeboat-cli devices
@@ -161,13 +174,15 @@ python -m lifeboat scan disk.img        # command line
 python -m pytest -q                     # tests (the filesystem-image tests need Linux, see below)
 python packaging/stamp_build.py         # optional: build number and commit for the About box
 python packaging/make_icon.py           # icon and installer images
-pyinstaller packaging/lifeboat.spec --noconfirm
+pyinstaller packaging/lifeboat.spec --noconfirm       # Windows: Lifeboat.exe + lifeboat-cli.exe
 ISCC /DAppVersion=1.1.0 packaging\installer.iss    # Windows installer (Inno Setup 6)
+pyinstaller packaging/lifeboat_mac.spec --noconfirm   # Mac: Lifeboat.app (with lifeboat-cli inside)
 ```
 
 The test suite builds real NTFS, FAT12/16/32 and exFAT images with the reference Linux tools (`mkntfs`/`ntfs-3g`, `mkfs.vfat`/`mtools`, `mkfs.exfat`/`exfat-fuse`, `sfdisk`, `sgdisk`). It needs those tools and root for FUSE mounts. CI runs:
 
 * **Linux:** lint (ruff), type checking (mypy), and the full suite. That covers byte-for-byte recovery of live, deleted, fragmented, compressed and sparse files; damaged GPT, boot sectors, MFT and FAT; simulated bad, flaky, slow and hanging sectors; disconnects; a genuinely full destination; stop-and-resume; carving of 20 file types; 200 random-corruption cases; and the GUI.
+* **Mac (Apple Silicon and Intel):** the unit tests, then **real FAT32 and exFAT disks made by macOS** (`hdiutil`, files written and deleted through macOS's own drivers), attached read-only and recovered byte for byte through the raw device, by the Python package and by the `lifeboat-cli` inside the app. Then it builds `Lifeboat.app`, smoke-tests it, and packages the `.dmg` and `.zip`.
 * **Windows:** the unit tests, then an end-to-end test on a **real NTFS disk** (a VHDX created and formatted by Windows). It recovers every file, including deleted ones, compressed ones and paths longer than 260 characters, through the raw disk, the drive letter, and the packaged `lifeboat-cli.exe`. Then it builds and smoke-tests `Lifeboat.exe`, and packages the installer and portable zip.
 
 ## How it works
