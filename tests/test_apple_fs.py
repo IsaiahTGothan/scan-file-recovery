@@ -141,3 +141,34 @@ def test_hfsplus_damaged_header_uses_backup(disks, tmp_path):
     assert volume.kind == "HFS+"
     assert any("backup copy" in m for m in messages)
     assert sum(1 for _ in result.root.files()) > 400
+
+
+def test_apfs_files(disks):
+    if "apfs" not in disks:
+        pytest.skip("test disk not made yet")
+    root, index = _check("apfs", disks, deleted_required=False)
+    assert root.volume is not None and root.volume.kind == "APFS"
+    assert root.volume.label == "LBAPFS"
+    assert index["Sparse/mostly hole.bin"][0].flags & F.SPARSE
+    assert index["Docs/hard link to report.txt"][0].flags & F.HARDLINK
+    # Files deleted in the last transactions come back from the container's older checkpoints.
+    deleted = {path for path, nodes in index.items() for n in nodes if n.flags & F.DELETED and not n.flags & F.DIR}
+    assert {"Deleted/small note.txt", "Deleted/folder/photo.jpg"} <= deleted
+
+
+def test_apfs_damaged_superblock_uses_checkpoint(disks, tmp_path):
+    """Wiping block 0 of the container: the newest superblock in the checkpoint area takes over."""
+    if "apfs" not in disks:
+        pytest.skip("test disk not made yet")
+    image = tmp_path / "damaged.img"
+    shutil.copy(disks["apfs"][0], image)
+    result, _reader, _messages = _scan(image)
+    start = next(v.offset for v in result.volumes if v.volume is not None)
+    with open(image, "r+b") as fh:
+        fh.seek(start + 100)
+        fh.write(b"\xff" * 64)                                   # breaks block 0's checksum
+    result, _reader, messages = _scan(image)
+    volume = next(v.volume for v in result.volumes if v.volume is not None)
+    assert volume.kind == "APFS"
+    assert any("checkpoint" in m for m in messages)
+    assert sum(1 for _ in result.root.files()) > 400

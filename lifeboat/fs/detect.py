@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from ..events import EventBus, JobControl
 from ..rescue.reader import RescueReader
+from .apfs import ApfsVolume, NxSuperblock, find_superblock
 from .exfat import ExfatBoot, ExfatVolume
 from .fat import FatBoot, FatVolume
 from .hfsplus import HfsHeader, HfsPlusVolume, backup_header, primary_header
@@ -25,7 +26,8 @@ class Probe:
 UNSUPPORTED_NOTES = {
     "BitLocker": "BitLocker-encrypted. Unlock it in Windows, then choose its drive letter as the source.",
     "ReFS": "ReFS is not supported. Use Deep Scan to recover files by signature.",
-    "APFS": "Mac APFS is not supported yet. Use Deep Scan to recover files by signature.",
+    "APFS": "The APFS container is damaged beyond what Lifeboat can read. Use Deep Scan to recover files by "
+            "signature.",
     "Core Storage": "Mac Core Storage volume (FileVault 2 or Fusion Drive on macOS 10.7-10.12); unlock it on a Mac, "
                     "or use Deep Scan to recover files by signature.",
     "ext": "Linux ext2/3/4 is not supported. Use Deep Scan to recover files by signature.",
@@ -70,6 +72,9 @@ def probe(reader: RescueReader, offset: int, size: int | None = None) -> Probe:
     hfs = primary_header(reader, offset, head)
     if hfs is not None:
         return Probe("HFS+", True, hfs)
+    nx = find_superblock(reader, offset, head)
+    if nx is not None:
+        return Probe("APFS", True, nx, used_backup=nx.used_backup)
     other = _identify_other(head)
     if other:
         return Probe(other, False, note=UNSUPPORTED_NOTES.get(other, ""))
@@ -128,4 +133,7 @@ def mount(reader: RescueReader, offset: int, found: Probe, events: EventBus | No
     if found.kind == "HFS+":
         assert isinstance(found.boot, HfsHeader)
         return HfsPlusVolume(reader, found.boot, events, control, metadata_retry_seconds)
+    if found.kind == "APFS":
+        assert isinstance(found.boot, NxSuperblock)
+        return ApfsVolume(reader, found.boot, events, control, metadata_retry_seconds)
     return None
