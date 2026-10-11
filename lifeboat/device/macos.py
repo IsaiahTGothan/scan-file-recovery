@@ -29,6 +29,12 @@ TIMEOUT = 20.0                          # seconds for one diskutil call
 
 Plist = dict[str, Any]
 
+# The drive list is refreshed every few seconds. "diskutil info" also asks each drive for its
+# SMART status: not something to do to a failing drive every few seconds. So it is asked once
+# per drive, and again only when that drive's entry in "diskutil list" changes.
+_info_cache: dict[str, tuple[tuple, Plist]] = {}
+_system_cache: set[str] | None = None
+
 
 def run_plist(args: list[str], timeout: float = TIMEOUT) -> Any:
     """Run a command that prints a property list; None if it fails, hangs or prints nonsense."""
@@ -71,13 +77,38 @@ def physical_disks_of(info: Plist) -> set[str]:
 
 
 def system_disks() -> set[str]:
-    """Whole disks holding the running macOS (and its APFS container)."""
-    info = disk_info("/")
-    disks = physical_disks_of(info)
-    parent = whole_disk(str(info.get("ParentWholeDisk", "")))
-    if parent:
-        disks.add(parent)
-    return disks
+    """Whole disks holding the running macOS (and its APFS container). They don't change."""
+    global _system_cache
+    if _system_cache is None:
+        info = disk_info("/")
+        disks = physical_disks_of(info)
+        parent = whole_disk(str(info.get("ParentWholeDisk", "")))
+        if parent:
+            disks.add(parent)
+        if not info:
+            return disks  # diskutil didn't answer: ask again next time
+        _system_cache = disks
+    return set(_system_cache)
+
+
+def _signature(entry: Plist) -> tuple:
+    parts = [(p.get("DeviceIdentifier"), p.get("Size"), p.get("VolumeName"), p.get("MountPoint"))
+             for p in list(entry.get("Partitions") or []) + list(entry.get("APFSVolumes") or [])
+             if isinstance(p, dict)]
+    return entry.get("Size"), entry.get("Content"), tuple(parts)
+
+
+def cached_disk_info(entry: Plist) -> Plist:
+    """``diskutil info`` for a whole disk, asked again only when its listing changed."""
+    ident = str(entry.get("DeviceIdentifier", ""))
+    signature = _signature(entry)
+    cached = _info_cache.get(ident)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+    info = disk_info(ident)
+    if info:
+        _info_cache[ident] = (signature, info)
+    return info
 
 
 def _volume_names(entry: Plist) -> list[str]:
@@ -138,7 +169,7 @@ def list_devices() -> list[DeviceInfo]:
     for entry in listing.get("AllDisksAndPartitions") or []:
         if not isinstance(entry, dict) or not entry.get("DeviceIdentifier"):
             continue
-        device = describe_disk(entry, disk_info(str(entry["DeviceIdentifier"])), system)
+        device = describe_disk(entry, cached_disk_info(entry), system)
         if device is not None:
             devices.append(device)
     return devices

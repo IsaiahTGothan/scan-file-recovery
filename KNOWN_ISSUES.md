@@ -35,8 +35,9 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 
 ## Limitations (not supported yet)
 - Owner logo from zays.us: the build environment's network policy blocks the site. Add the logo as `lifeboat/assets/owner-logo.png`.
-- Not code-signed: Windows SmartScreen warns on first run.
+- Not code-signed: Windows SmartScreen warns on first run. The Mac app isn't notarized by Apple: macOS blocks the first start until you click **Open Anyway** (System Settings → Privacy & Security).
 - Not yet tested on a physically failing drive. Tested only with simulated failures and healthy real disks.
+- The Mac version is tested on GitHub's Macs (Apple Silicon and Intel) with disk images that macOS itself formats and attaches as disks, not yet on a person's Mac with a USB drive. Its drive list doesn't read serial numbers yet, so a reconnected drive is recognised by its name and size.
 - Can't browse APFS, ext2/3/4 or ReFS (signature search still works on them).
 - Windows EFS-encrypted files can't be decrypted. Windows system files compressed with CompactOS (WOF) are skipped.
 - Physical damage (clicking, not spinning up, not detected) needs a clean-room lab.

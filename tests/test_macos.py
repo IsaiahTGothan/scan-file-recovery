@@ -66,6 +66,8 @@ def fake_diskutil(monkeypatch):
 
     monkeypatch.setattr(macos, "run_plist", run_plist)
     monkeypatch.setattr(check_mac, "run_plist", run_plist)
+    monkeypatch.setattr(macos, "_info_cache", {})
+    monkeypatch.setattr(macos, "_system_cache", None)
     return calls
 
 
@@ -81,6 +83,17 @@ def test_drive_list_from_diskutil(fake_diskutil):
     assert devices["/dev/rdisk6"].status == NO_MEDIA  # a card reader without a card
     assert devices["/dev/rdisk7"].status == NOT_ANSWERING  # an external drive that reports no size
     assert not devices["/dev/rdisk7"].readable
+
+    # The list refreshes every few seconds: drives are asked about themselves only when they change.
+    asked = len([c for c in fake_diskutil if c[:2] == ["diskutil", "info"]])
+    macos.list_devices()
+    assert len([c for c in fake_diskutil if c[:2] == ["diskutil", "info"]]) == asked
+    LISTING["AllDisksAndPartitions"][2]["Partitions"][0]["VolumeName"] = "Renamed"
+    try:
+        macos.list_devices()
+        assert [c[-1] for c in fake_diskutil if c[:2] == ["diskutil", "info"]][asked:] == ["disk4"]
+    finally:
+        LISTING["AllDisksAndPartitions"][2]["Partitions"][0]["VolumeName"] = "Seagate Backup"
 
 
 def test_system_disks_follow_the_apfs_container(fake_diskutil):
