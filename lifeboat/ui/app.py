@@ -31,8 +31,10 @@ def _set_windows_app_id() -> None:
 
 
 def _ask_for_admin(app: object) -> bool:
-    """On Windows without admin rights, offer to restart elevated. True = quit now."""
-    if sys.platform != "win32":
+    """Without administrator rights (Windows, macOS), offer to restart with them. True = quit now."""
+    from ..elevate import can_elevate, relaunch_elevated
+
+    if not can_elevate():
         return False
     from PySide6.QtWidgets import QMessageBox
 
@@ -44,20 +46,15 @@ def _ask_for_admin(app: object) -> bool:
     box.setWindowTitle(APP_FULL_NAME)
     box.setIcon(QMessageBox.Icon.Warning)
     box.setText("<b>Lifeboat needs administrator rights to read drives directly.</b>")
-    box.setInformativeText("Without them you can still open disk image files. Restart as administrator now?")
+    asks = "macOS asks for an administrator password." if sys.platform == "darwin" else ""
+    box.setInformativeText(f"Without them you can still open disk image files. Restart with administrator rights "
+                           f"now? {asks}".strip())
     restart = box.addButton("Restart as administrator", QMessageBox.ButtonRole.AcceptRole)
     box.addButton("Continue without", QMessageBox.ButtonRole.RejectRole)
     box.exec()
     if box.clickedButton() is not restart:
         return False
-    import ctypes
-
-    params = " ".join(f'"{a}"' for a in sys.argv[1:])
-    if getattr(sys, "frozen", False):
-        exe, args = sys.executable, params
-    else:
-        exe, args = sys.executable, f"-m lifeboat {params}"
-    return ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, args, None, 1) > 32
+    return relaunch_elevated(sys.argv[1:])
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,7 +1,8 @@
-"""Render the Lifeboat icon to .ico/.png (and the installer side images).
+"""Render the Lifeboat icon to .ico/.icns/.png (and the installer side images).
 
 Usage: python packaging/make_icon.py
-Writes lifeboat/assets/lifeboat.ico, lifeboat.png and packaging/wizard-*.bmp.
+Writes lifeboat/assets/lifeboat.ico (Windows), lifeboat.icns (macOS), lifeboat.png and
+packaging/wizard-*.bmp.
 """
 
 from __future__ import annotations
@@ -39,6 +40,9 @@ def main() -> None:
     frames = {s: render(s) for s in sizes}
     frames[256].save(assets / "lifeboat.ico", format="ICO", sizes=[(s, s) for s in sizes],
                      append_images=[frames[s] for s in sizes if s != 256])
+    # macOS: every size from 16 to 1024 (the @2x variants of 512), drawn at that size.
+    render(1024).save(assets / "lifeboat.icns", format="ICNS",
+                      append_images=[render(s) for s in (16, 32, 64, 128, 256, 512)])
     # Inno Setup wizard images (BMP, no alpha): large 164x314 and small 55x55 at 100% scale.
     navy = (14, 26, 43)
     large = Image.new("RGB", (164, 314), navy)

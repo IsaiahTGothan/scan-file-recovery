@@ -15,6 +15,7 @@ import sys
 from ..util import unix_to_filetime
 
 IS_WINDOWS = sys.platform == "win32"
+IS_MAC = sys.platform == "darwin"
 
 # Windows error codes meaning "no space" / "device went away".
 WIN_DISK_FULL = {39, 112}
@@ -143,6 +144,10 @@ else:
             return False
 
     def volume_filesystem(path: str) -> str:
+        if IS_MAC:
+            from ..device.macos import volume_filesystem as _mac
+
+            return _mac(path)
         best = ""
         fstype = ""
         real = os.path.realpath(path)
@@ -176,6 +181,10 @@ def disks_for_path(path: str) -> set[str]:
             return {f"disk:{n}" for n in _win(os.path.abspath(path))}
         except Exception:  # noqa: BLE001
             return set()
+    if IS_MAC:
+        from ..device.macos import disks_for_path as _mac
+
+        return _mac(path)
     try:
         st = os.stat(path)
     except OSError:
@@ -199,6 +208,10 @@ def is_network_path(path: str) -> bool:
             return _win(os.path.abspath(path))
         except Exception:  # noqa: BLE001
             return False
+    if IS_MAC:
+        from ..device.macos import is_network_path as _mac
+
+        return _mac(path)
     return False
 
 
@@ -210,5 +223,9 @@ def disks_for_source(path: str, kind: str, disk_number: int | None) -> set[str]:
             return disks_for_path(path.replace("\\\\.\\", "") + "\\")
         return set()
     if kind == "disk":
+        if IS_MAC:  # /dev/rdisk4 (raw) and /dev/disk4 are the same disk
+            from ..device.macos import whole_disk
+
+            return {f"/dev/{whole_disk(path)}"} if whole_disk(path) else set()
         return {os.path.realpath(path)}
     return set()

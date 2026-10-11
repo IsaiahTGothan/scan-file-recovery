@@ -43,8 +43,10 @@ from PySide6.QtWidgets import (
 
 from ..branding import APP_FULL_NAME, APP_NAME, PUBLISHER, TAGLINE, owner_logo
 from ..device.base import NO_MEDIA, NOT_ANSWERING, BlockDevice, DeviceInfo
+from ..device.check import system_tool
 from ..device.enumerate import is_admin, list_devices, open_device
 from ..device.image import ImageDevice
+from ..elevate import can_elevate
 from ..errors import LifeboatError, describe
 from ..events import Event, EventBus, Level, Progress
 from ..fs.content import OK, FileContentReader
@@ -273,7 +275,7 @@ class MainWindow(QMainWindow):
         head.addWidget(title)
         head.addStretch(1)
         self.btn_check = _tool("Drive check", "pulse", "Find drives the computer detects but can't read, and "
-                                                       "what to try (also: is a drive in Disk Management?)")
+                                                       f"what to try (also: is a drive in {system_tool()}?)")
         head.addWidget(self.btn_check)
         self.btn_refresh = QToolButton()
         self.btn_refresh.setIcon(icons.icon("refresh"))
@@ -336,14 +338,22 @@ class MainWindow(QMainWindow):
             c_layout.addStretch(1)
             steps.addWidget(card, 0, i)
         layout.addLayout(steps)
+        if sys.platform == "darwin":
+            offers = ("<li>If macOS says the disk isn't readable and offers to <b>Initialize</b> it, click "
+                      "<b>Ignore</b>. Don't run <b>First Aid</b> on it either: both write to the drive and can "
+                      "destroy what is left.</li>")
+            explorer = "Keep Finder, Spotlight and Time Machine away from the failing drive while Lifeboat works."
+        else:
+            offers = ("<li>If Windows offers to <b>format</b> or <b>scan and fix</b> the drive, click <b>Cancel</b>: "
+                      "both can destroy what is left.</li>")
+            explorer = "Keep File Explorer away from the failing drive while Lifeboat works."
         safety = QLabel(
             "<b>Before you start</b><ul style='margin-left:-20px'>"
             "<li>Lifeboat never writes to the drive it reads from.</li>"
-            "<li>If Windows offers to <b>format</b> or <b>scan and fix</b> the drive, click <b>Cancel</b>: "
-            "both can destroy what is left.</li>"
+            f"{offers}"
             "<li>For a drive that clicks, hangs or keeps disconnecting, use <b>Create image</b> first, then "
             "recover from the image.</li>"
-            "<li>Keep File Explorer away from the failing drive while Lifeboat works.</li></ul>")
+            f"<li>{explorer}</li></ul>")
         safety.setWordWrap(True)
         safety.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(safety)
@@ -737,9 +747,11 @@ class MainWindow(QMainWindow):
         self.devices = devices
         self.sources.set_devices(devices + self.images, keep)
         admin = is_admin()
+        how = ("quit it and open it again, then choose Restart as administrator" if sys.platform == "darwin"
+               else "right-click > Run as administrator")
         self.welcome_admin.setText(
             "" if admin else "Lifeboat is not running as administrator, so it cannot read drives directly. "
-                             "Restart it as administrator (right-click > Run as administrator), or open a disk image.")
+                             f"Restart it as administrator ({how}), or open a disk image.")
 
     def select_source(self, info: DeviceInfo) -> None:
         if self._selecting:
@@ -873,7 +885,8 @@ class MainWindow(QMainWindow):
             if hint:
                 notes.append(f"<p>{hint}</p>")
         if info.system:
-            notes.append("<p><b>This drive holds the running Windows installation.</b> Scanning it is safe "
+            system_name = "macOS" if sys.platform == "darwin" else "Windows"
+            notes.append(f"<p><b>This drive holds the running {system_name} installation.</b> Scanning it is safe "
                          "(read-only), but recover files to a different drive.</p>")
         if info.kind == "volume":
             notes.append("<p>Reading a drive letter goes through Windows, which decrypts BitLocker volumes that "
@@ -885,7 +898,7 @@ class MainWindow(QMainWindow):
                          "disconnects, stop and <b>Create a disk image</b> instead, then recover from the image.</p>")
         self.ov_notes.setHtml("".join(notes))
         self.ov_admin.setVisible(self.open_error is not None and self.open_error.code == "LB-101"
-                                 and sys.platform == "win32")
+                                 and can_elevate())
         self.ov_check.setVisible(bool(info.status) or (self.open_error is not None and info.kind == "disk"))
         for button in (self.ov_scan, self.ov_deep, self.ov_image):
             button.setVisible(not info.status)  # nothing to scan or image until the drive answers
@@ -951,17 +964,9 @@ class MainWindow(QMainWindow):
         self.refresh_devices()
 
     def restart_as_admin(self) -> None:
-        if sys.platform != "win32":
-            return
-        import ctypes
+        from ..elevate import relaunch_elevated
 
-        params = " ".join(f'"{a}"' for a in sys.argv[1:])
-        if getattr(sys, "frozen", False):
-            exe, args = sys.executable, params
-        else:
-            exe, args = sys.executable, f'-m lifeboat {params}'
-        rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, args, None, 1)
-        if rc > 32:
+        if relaunch_elevated(sys.argv[1:]):
             QApplication.quit()
 
     # ================================================================== jobs

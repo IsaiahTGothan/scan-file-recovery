@@ -107,3 +107,73 @@ jobs:
           files: |
             dist/Lifeboat-Setup-*.exe
             dist/Lifeboat-*-portable.zip
+
+  macos:
+    name: macOS ${{ matrix.arch }} - tests, real-disk end-to-end, app
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: Apple Silicon
+            tag: AppleSilicon
+          - runner: macos-15-intel
+            arch: Intel
+            tag: Intel
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" pillow
+      - name: Unit tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+      - name: Create real FAT32 and exFAT test disks (hdiutil)
+        run: python tests/macos/hdiutil_e2e.py create
+      - name: Recover from the raw disks with the Python package
+        run: sudo -E env "PATH=$PATH" "$(which python)" tests/macos/hdiutil_e2e.py verify-api
+      - name: Build Lifeboat.app
+        run: |
+          python packaging/stamp_build.py
+          python packaging/make_icon.py
+          pyinstaller packaging/lifeboat_mac.spec --noconfirm --distpath dist --workpath build/pyi
+          plutil -p dist/Lifeboat.app/Contents/Info.plist
+      - name: Smoke test the app
+        run: |
+          QT_QPA_PLATFORM=offscreen dist/Lifeboat.app/Contents/MacOS/Lifeboat --smoke-test
+          log="$HOME/Library/Application Support/Lifeboat/logs/lifeboat.log"
+          tail -n 20 "$log"
+          grep "Smoke test finished" "$log" | tail -1 | grep -q "exit 0"
+      - name: Recover from the raw disks with the bundled lifeboat-cli
+        run: sudo -E env "PATH=$PATH" "$(which python)" tests/macos/hdiutil_e2e.py verify-cli dist/Lifeboat.app/Contents/MacOS/lifeboat-cli
+      - name: Remove the test disks
+        if: always()
+        run: python tests/macos/hdiutil_e2e.py destroy
+      - name: Disk image and zip
+        run: |
+          version=$(python -c "import lifeboat; print(lifeboat.__version__)")
+          name="Lifeboat-$version-build$GITHUB_RUN_NUMBER-macOS-${{ matrix.tag }}"
+          ditto -c -k --keepParent dist/Lifeboat.app "dist/$name.zip"
+          hdiutil create -volname "Lifeboat" -srcfolder dist/Lifeboat.app -ov -format UDZO "dist/$name.dmg"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lifeboat-macOS-${{ matrix.tag }}
+          path: |
+            dist/Lifeboat-*-macOS-*.dmg
+            dist/Lifeboat-*-macOS-*.zip
+          if-no-files-found: error
+      - name: Publish release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Lifeboat-*-macOS-*.dmg
+            dist/Lifeboat-*-macOS-*.zip

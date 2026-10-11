@@ -36,7 +36,7 @@ E_OPEN_DENIED = _register(
 E_OPEN_FAILED = _register(
     "LB-102",
     "The drive or image could not be opened",
-    "Check that the drive is still connected and appears in Disk Management.",
+    "Check that the drive is still connected, then run a Drive check (top of Sources).",
 )
 E_READ_BAD = _register(
     "LB-110",

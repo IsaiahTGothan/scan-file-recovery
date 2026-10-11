@@ -161,11 +161,7 @@ class PosixDevice(BlockDevice):
         self._path = path
         self._direct = False
         self._fd = self._open(path)
-        size = _ioctl_int(self._fd, _BLKGETSIZE64, "Q") if sys.platform.startswith("linux") else None
-        if not size:
-            size = os.lseek(self._fd, 0, os.SEEK_END)
-        logical = _ioctl_int(self._fd, _BLKSSZGET, "i") if sys.platform.startswith("linux") else None
-        physical = _ioctl_int(self._fd, _BLKPBSZGET, "I") if sys.platform.startswith("linux") else None
+        size, logical, physical = self._geometry(self._fd)
         if info is None:
             info = DeviceInfo(path=path, kind="disk", size=size)
         info.size = size
@@ -174,6 +170,16 @@ class PosixDevice(BlockDevice):
         self.info = info
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lifeboat-io")
         self._stuck: Future[bytes] | None = None
+
+    def _geometry(self, fd: int) -> tuple[int, int | None, int | None]:
+        """Size in bytes, and the logical and physical sector sizes when the system reports them."""
+        linux = sys.platform.startswith("linux")
+        size = _ioctl_int(fd, _BLKGETSIZE64, "Q") if linux else None
+        if not size:
+            size = os.lseek(fd, 0, os.SEEK_END)
+        logical = _ioctl_int(fd, _BLKSSZGET, "i") if linux else None
+        physical = _ioctl_int(fd, _BLKPBSZGET, "I") if linux else None
+        return size, logical, physical
 
     def _open(self, path: str) -> int:
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)

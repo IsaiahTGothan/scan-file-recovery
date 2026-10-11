@@ -18,6 +18,8 @@ def list_devices() -> list[DeviceInfo]:
     try:
         if sys.platform == "win32":
             from .windows import list_devices as _list
+        elif sys.platform == "darwin":
+            from .macos import list_devices as _list
         elif sys.platform.startswith("linux"):
             from .posix import list_devices as _list
         else:
@@ -54,6 +56,10 @@ def open_device(source: DeviceInfo | str, sector_size: int | None = None) -> Blo
         from .windows import WindowsDevice
 
         return WindowsDevice(path, info)
+    if sys.platform == "darwin":
+        from .macos import MacDevice
+
+        return MacDevice(path, info)
     if os.name == "posix":
         from .posix import PosixDevice
 

@@ -46,14 +46,14 @@ ROLE_INFO = Qt.ItemDataRole.UserRole + 1
 
 # --------------------------------------------------------------------- sources
 def device_icon_name(info: DeviceInfo) -> str:
-    if info.kind == "image":
-        return "image"
     bus = info.bus.upper()
+    if info.kind == "image" or bus == "DISK IMAGE":
+        return "image"
     if "USB" in bus:
         return "usb"
-    if bus in ("SD", "MMC", "SD/MMC"):
+    if bus in ("SD", "MMC", "SD/MMC", "SECURE DIGITAL"):
         return "sd"
-    if "NVME" in bus:
+    if "NVME" in bus or "FABRIC" in bus or "PCI" in bus:  # Apple Fabric / PCI-Express: internal SSDs
         return "ssd"
     return "hdd"
 

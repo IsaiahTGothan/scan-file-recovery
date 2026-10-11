@@ -7,12 +7,29 @@ import logging
 import logging.handlers
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 from . import build_info
 
 _FAULT_FILE = None
+
+
+def _usable(folder: Path) -> bool:
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return os.access(folder, os.W_OK)
+
+
+def _fallback(name: str) -> Path:
+    """A folder in the temporary directory, for when the usual one can't be written."""
+    uid = getattr(os, "getuid", lambda: 0)()
+    folder = Path(tempfile.gettempdir()) / f"lifeboat-{uid}" / name
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
 
 
 def app_data_dir() -> Path:
@@ -22,14 +39,14 @@ def app_data_dir() -> Path:
         base = Path.home() / "Library" / "Application Support" / "Lifeboat"
     else:
         base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "lifeboat"
-    base.mkdir(parents=True, exist_ok=True)
-    return base
+    # A copy started with administrator rights can leave this folder owned by the administrator
+    # account; a normal copy must still start (and log) then.
+    return base if _usable(base) else _fallback("data")
 
 
 def log_dir() -> str:
     folder = app_data_dir() / "logs"
-    folder.mkdir(parents=True, exist_ok=True)
-    return str(folder)
+    return str(folder if _usable(folder) else _fallback("logs"))
 
 
 def setup_logging(verbose: bool = False) -> str:
@@ -42,8 +59,14 @@ def setup_logging(verbose: bool = False) -> str:
         return str(log_file)
     root.setLevel(logging.DEBUG)
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
-    file_handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=10 << 20, backupCount=5,
-                                                        encoding="utf-8")
+    try:
+        file_handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=10 << 20, backupCount=5,
+                                                            encoding="utf-8")
+    except OSError:  # e.g. a log file left behind by a copy running with administrator rights
+        folder = _fallback("logs")
+        log_file = folder / "lifeboat.log"
+        file_handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=10 << 20, backupCount=5,
+                                                            encoding="utf-8")
     file_handler.setFormatter(fmt)
     file_handler.setLevel(logging.DEBUG)
     file_handler._lifeboat = True  # type: ignore[attr-defined]

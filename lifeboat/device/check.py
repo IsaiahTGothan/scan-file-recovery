@@ -316,7 +316,8 @@ def read_test(opener: Callable[[str], BlockDevice], result: CheckResult) -> None
         result.read_error = f"it didn't answer within {limit:.0f} seconds"
         return
     result.tested, result.read_ok, result.read_seconds = found.tested, found.read_ok, found.read_seconds
-    result.read_error, result.read_error_kind, result.health = found.read_error, found.read_error_kind, found.health
+    result.read_error, result.read_error_kind = found.read_error, found.read_error_kind
+    result.health = found.health or result.health  # keep a health status found another way
 
 
 def open_failed(result: CheckResult, exc: DeviceOpenError) -> None:
@@ -357,6 +358,10 @@ def run_check(progress: Progress | None = None, in_use: Mapping[str, int] | None
         from .check_windows import check_windows
 
         results = check_windows(progress, busy)
+    elif sys.platform == "darwin":
+        from .check_mac import check_mac
+
+        results = check_mac(progress, busy)
     elif sys.platform.startswith("linux"):
         results = _check_linux(progress, busy)
     else:

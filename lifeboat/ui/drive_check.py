@@ -117,7 +117,7 @@ class DriveCheckDialog(QDialog):
         note.setWordWrap(True)
         note.setStyleSheet(f"color:{t.warn}")
         admin.addWidget(note, 1)
-        if sys.platform == "win32":
+        if sys.platform in ("win32", "darwin"):
             restart = QPushButton(icons.icon("lock"), "Restart as administrator")
             restart.clicked.connect(self._restart)
             admin.addWidget(restart)
