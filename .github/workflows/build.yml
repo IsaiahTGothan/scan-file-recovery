@@ -135,7 +135,7 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python -m pytest -q
-      - name: Create real FAT32 and exFAT test disks (hdiutil)
+      - name: Create real FAT32, exFAT, HFS+ and APFS test disks (hdiutil)
         run: python tests/macos/hdiutil_e2e.py create
       - name: Recover from the raw disks with the Python package
         run: sudo -E env "PATH=$PATH" "$(which python)" tests/macos/hdiutil_e2e.py verify-api
