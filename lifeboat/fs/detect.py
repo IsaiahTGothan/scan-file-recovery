@@ -28,6 +28,8 @@ UNSUPPORTED_NOTES = {
     "ReFS": "ReFS is not supported. Use Deep Scan to recover files by signature.",
     "APFS": "The APFS container is damaged beyond what Lifeboat can read. Use Deep Scan to recover files by "
             "signature.",
+    "HFS+": "The HFS+ volume header and its backup copy are both damaged. Use Deep Scan to recover files by "
+            "signature.",
     "Core Storage": "Mac Core Storage volume (FileVault 2 or Fusion Drive on macOS 10.7-10.12); unlock it on a Mac, "
                     "or use Deep Scan to recover files by signature.",
     "ext": "Linux ext2/3/4 is not supported. Use Deep Scan to recover files by signature.",
@@ -76,7 +78,7 @@ def probe(reader: RescueReader, offset: int, size: int | None = None) -> Probe:
     if nx is not None:
         return Probe("APFS", True, nx, used_backup=nx.used_backup)
     other = _identify_other(head)
-    if other:
+    if other and other not in ("HFS+", "APFS"):
         return Probe(other, False, note=UNSUPPORTED_NOTES.get(other, ""))
     # Backups of damaged boot sectors and volume headers.
     if size:
@@ -109,6 +111,8 @@ def probe(reader: RescueReader, offset: int, size: int | None = None) -> Probe:
                 if parsed.bytes_per_sector != ss:
                     continue
             return Probe(kind, True, parsed, used_backup=True)
+    if other:
+        return Probe(other, False, note=UNSUPPORTED_NOTES[other])
     return Probe("", False, note="No known filesystem was found here.")
 
 

@@ -21,7 +21,7 @@ from lifeboat.fs.applecomp import (
 )
 
 VECTORS = Path(__file__).parent / "fixtures" / "compression"
-INDEX = json.loads((VECTORS / "vectors.json").read_text())
+INDEX = json.loads((VECTORS / "vectors.json").read_text(encoding="utf-8"))
 
 
 def _decode(name: str, data: bytes) -> bytes:

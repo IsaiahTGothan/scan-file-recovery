@@ -37,7 +37,7 @@ def disks(tmp_path_factory) -> dict[str, tuple[Path, dict]]:
         image = folder / f"{name}.img"
         with gzip.open(gz, "rb") as src, open(image, "wb") as dst:
             shutil.copyfileobj(src, dst, 1 << 20)
-        out[name] = (image, json.loads((FIXTURES / f"{name}.json").read_text()))
+        out[name] = (image, json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8")))
     return out
 
 

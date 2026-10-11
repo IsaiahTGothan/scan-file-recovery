@@ -34,7 +34,7 @@ from ..errors import (
 from ..events import EventBus, InterventionHandler, JobControl, Progress, RateMeter
 from ..fs.apfs import NxSuperblock, container_starts_at
 from ..fs.carving import Carver
-from ..fs.detect import Probe, mount, probe
+from ..fs.detect import UNSUPPORTED_NOTES, Probe, mount, probe
 from ..fs.exfat import ExfatBoot
 from ..fs.fat import FatBoot
 from ..fs.hfsplus import HfsHeader
@@ -191,6 +191,8 @@ class Scanner:
                 continue
             else:
                 note = found.note or "No readable filesystem was found."
+                if entry.type_name == "Apple Core Storage" and not found.kind:
+                    note = UNSUPPORTED_NOTES["Core Storage"]
                 code = E_BITLOCKER if found.kind == "BitLocker" else E_FS_UNSUPPORTED
                 self.events.warning(f"{title}: {note}", code=code)
                 vr.error = note
