@@ -427,7 +427,8 @@ class HfsPlusVolume(Volume):
         return out, holes
 
     # ---------------------------------------------------------------- journal
-    def _journal_read(self, pos: int, length: int) -> bytes:
+    def _journal_read(self, pos: int, length: int, mode: ReadMode | None = None) -> bytes:
+        """``length`` bytes of the journal from ``pos``, wrapping around its end like macOS does."""
         assert self._journal is not None
         base, size, block, _hdr, _e = self._journal
         out = bytearray()
@@ -435,7 +436,7 @@ class HfsPlusVolume(Volume):
             if pos >= size:
                 pos = block + (pos - size)
             take = min(length, size - pos)
-            data, _bad = self._read(base + pos, take, None)
+            data, _bad = self._read(base + pos, take, mode)
             out += data
             pos += take
             length -= take
@@ -722,7 +723,8 @@ class HfsPlusVolume(Volume):
         return self._build_tree(live, stale, progress)
 
     def _journal_entries(self, progress: Callable[[Progress], None] | None) -> list[Entry]:
-        """Catalog records in the old node copies kept by the journal (deleted files live here)."""
+        """Catalog records in the old node copies kept by the journal (deleted files live here).
+        The journal is read 4 MiB at a time; only catalog nodes are read out of it."""
         if self._journal is None or not self.node_size:
             return []
         base, size, block, blhdr_size, _endian = self._journal
@@ -730,27 +732,36 @@ class HfsPlusVolume(Volume):
             return []
         if progress is not None:
             progress(Progress("Looking for deleted files in the journal"))
-        journal, _holes = self._read(base, size, ReadMode.FAST)
         out: list[Entry] = []
         node_size = self.node_size
-        for pos in range(block, size - blhdr_size, block):
-            if journal[pos + 2:pos + 4] == b"\0\0" and journal[pos:pos + 2] == b"\0\0":
-                continue
-            entries = self._block_list(bytes(journal[pos:pos + blhdr_size]))
-            if entries is None:
-                continue
-            data_pos = pos + blhdr_size
-            for bnum, bsize in entries:
-                if data_pos + bsize > size:
-                    break
-                if bnum >= 0 and bsize >= node_size:
-                    fork_offset = self._catalog_offset(self.offset + bnum * block)
-                    if fork_offset is not None and fork_offset % node_size == 0:
-                        for k in range(0, bsize - node_size + 1, node_size):
-                            found = leaf_entries(bytes(journal[data_pos + k:data_pos + k + node_size]))
-                            if found:
-                                out.extend(found)
-                data_pos += bsize
+        window = 4 << 20
+        pos = block
+        while pos < size:
+            self._check()
+            length = min(window, size - pos)
+            data, _holes = self._read(base + pos, length, ReadMode.FAST)
+            for rel in range(0, length, block):
+                if data[rel + 2:rel + 4] == b"\0\0":          # no blocks listed: not a list header
+                    continue
+                raw = (bytes(data[rel:rel + blhdr_size]) if rel + blhdr_size <= length
+                       else self._journal_read(pos + rel, blhdr_size, ReadMode.FAST))
+                entries = self._block_list(raw)
+                if entries is None:
+                    continue
+                data_pos = pos + rel + blhdr_size
+                for bnum, bsize in entries:
+                    if data_pos >= size:
+                        data_pos = block + (data_pos - size)
+                    if bnum >= 0 and node_size <= bsize <= 1 << 20:
+                        fork_offset = self._catalog_offset(self.offset + bnum * block)
+                        if fork_offset is not None and fork_offset % node_size == 0:
+                            blob = self._journal_read(data_pos, bsize, ReadMode.FAST)
+                            for k in range(0, bsize - node_size + 1, node_size):
+                                found = leaf_entries(blob[k:k + node_size])
+                                if found:
+                                    out.extend(found)
+                    data_pos += bsize
+            pos += length
         return out
 
     def _catalog_offset(self, device: int) -> int | None:
