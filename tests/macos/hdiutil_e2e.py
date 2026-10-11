@@ -154,7 +154,8 @@ def cmd_verify_api() -> None:
                      for x in entry.get("Partitions", []) + entry.get("APFSVolumes", [])]
             print(f"  disk image {entry['DeviceIdentifier']}: OSInternal={entry.get('OSInternal')} "
                   f"OSInternalMedia={info.get('OSInternalMedia')} volume={entry.get('VolumeName')!r} "
-                  f"mount={entry.get('MountPoint')!r} parts={parts}", flush=True)
+                  f"mount={entry.get('MountPoint')!r} stores={entry.get('APFSPhysicalStores')} parts={parts}",
+                  flush=True)
     ours = {item["disk"].replace("/dev/disk", "/dev/rdisk") for item in state.values()}
     listed_images = {d.path for d in devices if d.bus == "Disk Image"}
     assert listed_images == ours, f"disk images listed: {sorted(listed_images)}, expected only {sorted(ours)}"

@@ -14,7 +14,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any
 
 from .check import CheckResult, Progress, read_test
-from .macos import MacDevice, describe_disk, disk_info, health_from_info, run_plist
+from .macos import MacDevice, describe_disk, health_from_info, run_plist, visible_disks
 
 Node = dict[str, Any]
 _CARD_WORDS = ("reader", "card", " sd", "sd/", "mmc", "xqd", "cfexpress", "compactflash")
@@ -90,13 +90,9 @@ def check_mac(progress: Progress | None = None, in_use: Mapping[str, int] | None
     root_user = getattr(os, "geteuid", lambda: 1)() == 0
     results: list[CheckResult] = []
     listing = run_plist(["diskutil", "list", "-plist"])
-    entries = listing.get("AllDisksAndPartitions") if isinstance(listing, dict) else []
     infos: dict[str, dict] = {}
-    for entry in entries or []:
-        if not isinstance(entry, dict) or not entry.get("DeviceIdentifier"):
-            continue
+    for entry, info in visible_disks(listing, fresh=True):  # the check asks every drive afresh
         ident = str(entry["DeviceIdentifier"])
-        info = disk_info(ident)
         device = describe_disk(entry, info, set())
         if device is None:
             continue

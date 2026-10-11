@@ -30,11 +30,20 @@ LISTING = {
          "Partitions": [{"DeviceIdentifier": "disk5s1", "Content": "DOS_FAT_32", "Size": 67076096}]},
         {"DeviceIdentifier": "disk6", "Size": 0},
         {"DeviceIdentifier": "disk7", "Size": 0},
-        # Security bundles macOS attaches for itself ("Cryptex" images): not a user's source.
+        # A security bundle macOS attaches for itself: a 4 MB image (disk10) holding an APFS container
+        # (disk8) with a "Cryptex" volume. Neither is a user's source; nor is an image it marks internal.
         {"DeviceIdentifier": "disk8", "Size": 4194304, "OSInternal": False,
-         "VolumeName": "Creedence11M6270.SECUREPKITRUSTSTOREASSETS_SECUREPKITRUSTSTORE_Cryptex",
-         "MountPoint": "/System/Volumes/Preboot/Cryptexes/Incoming/OS"},
+         "APFSPhysicalStores": [{"DeviceIdentifier": "disk10"}],
+         "APFSVolumes": [{"DeviceIdentifier": "disk8s1",
+                          "VolumeName": "Creedence11M6270.SECUREPKITRUSTSTOREASSETS_SECUREPKITRUSTSTORE_Cryptex",
+                          "MountPoint": "/System/Library/AssetsV2/com_apple_MobileAsset_PKITrustStore/x.asset"}]},
         {"DeviceIdentifier": "disk9", "Size": 4194304, "OSInternal": True},
+        {"DeviceIdentifier": "disk10", "Size": 4194304, "OSInternal": False},
+        # A user's own APFS disk image: the image (disk11) is a source, its container (disk12) is not.
+        {"DeviceIdentifier": "disk11", "Size": 209715200},
+        {"DeviceIdentifier": "disk12", "Size": 209682432, "APFSPhysicalStores": [{"DeviceIdentifier": "disk11"}],
+         "APFSVolumes": [{"DeviceIdentifier": "disk12s1", "VolumeName": "My Backup",
+                          "MountPoint": "/Volumes/My Backup"}]},
     ],
 }
 INFO = {
@@ -57,6 +66,12 @@ INFO = {
               "VirtualOrPhysical": "Virtual", "TotalSize": 4194304},
     "disk9": {"DeviceIdentifier": "disk9", "MediaName": "Disk Image", "BusProtocol": "Disk Image",
               "VirtualOrPhysical": "Virtual", "TotalSize": 4194304},
+    "disk10": {"DeviceIdentifier": "disk10", "MediaName": "Disk Image", "BusProtocol": "Disk Image",
+               "VirtualOrPhysical": "Virtual", "TotalSize": 4194304},
+    "disk11": {"DeviceIdentifier": "disk11", "MediaName": "Disk Image", "BusProtocol": "Disk Image",
+               "VirtualOrPhysical": "Virtual", "TotalSize": 209715200},
+    "disk12": {"DeviceIdentifier": "disk12", "MediaName": "", "BusProtocol": "Disk Image",
+               "VirtualOrPhysical": "Virtual", "TotalSize": 209682432},
     "/": {"ParentWholeDisk": "disk3", "APFSPhysicalStores": [{"APFSPhysicalStore": "disk0s2"}]},
 }
 
@@ -82,9 +97,10 @@ def fake_diskutil(monkeypatch):
 
 def test_drive_list_from_diskutil(fake_diskutil):
     devices = {d.path: d for d in macos.list_devices()}
-    # disk3 is the APFS container made from disk0s2 (a logical disk); disk8 and disk9 are macOS's own
-    # disk images: all left out. The disk image a user attached (disk5) stays.
-    assert set(devices) == {"/dev/rdisk0", "/dev/rdisk4", "/dev/rdisk5", "/dev/rdisk6", "/dev/rdisk7"}
+    # disk3 and disk12 are APFS containers (logical disks); disk8, disk9 and disk10 are macOS's own disk
+    # images: all left out. The disk images a user attached (disk5, disk11) stay.
+    assert set(devices) == {"/dev/rdisk0", "/dev/rdisk4", "/dev/rdisk5", "/dev/rdisk6", "/dev/rdisk7",
+                            "/dev/rdisk11"}
     internal, seagate, image = devices["/dev/rdisk0"], devices["/dev/rdisk4"], devices["/dev/rdisk5"]
     assert internal.system and internal.sector_size == 4096 and internal.bus == "Apple Fabric"
     assert seagate.title == "Disk 4: Seagate Portable" and seagate.size == TB5 and seagate.bus == "USB"
@@ -185,7 +201,6 @@ def test_mac_drive_check(fake_diskutil, monkeypatch):
         return {"list": LISTING}.get(args[1]) if args[1] == "list" else INFO.get(args[-1])
 
     monkeypatch.setattr(check_mac, "run_plist", run_plist)
-    monkeypatch.setattr(check_mac, "disk_info", lambda ident: INFO.get(ident, {}))
     opened = []
     monkeypatch.setattr(check_mac, "MacDevice", lambda path: opened.append(path) or MemoryDevice(bytes(1 << 16)))
     monkeypatch.setattr(check_mac.os, "geteuid", lambda: 0, raising=False)
@@ -197,7 +212,8 @@ def test_mac_drive_check(fake_diskutil, monkeypatch):
     assert by_name["SDXC Reader"].verdict == "no_media"
     assert by_name["WD Elements 25A3"].verdict == "not_answering"
     assert by_name["JMicron USB to SATA Bridge"].verdict == "adapter_only"
-    assert "/dev/rdisk5" not in opened and set(opened) == {"/dev/rdisk0", "/dev/rdisk4"}
+    assert "/dev/rdisk5" not in opened and set(opened) == {"/dev/rdisk0", "/dev/rdisk4", "/dev/rdisk11"}
+    assert not any(r.path in ("/dev/rdisk3", "/dev/rdisk8", "/dev/rdisk10", "/dev/rdisk12") for r in results)
 
     monkeypatch.setattr(check_mac.os, "geteuid", lambda: 501, raising=False)
     results = check_mac.check_mac()

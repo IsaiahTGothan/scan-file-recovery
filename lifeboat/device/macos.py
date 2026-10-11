@@ -125,13 +125,18 @@ def _volume_names(entry: Plist) -> list[str]:
 
 
 def is_logical(info: Plist) -> bool:
-    """APFS containers are logical disks made from a partition of a physical disk: skip them.
-    Attached disk images are virtual too, but they are a source like any drive."""
+    """Virtual disks other than disk images (attached disk images are a source like any drive)."""
     return info.get("VirtualOrPhysical") == "Virtual" and info.get("BusProtocol") != "Disk Image"
 
 
-def is_system_image(entry: Plist, info: Plist) -> bool:
-    """Disk images macOS attaches for itself (its "Cryptex" security bundles): not a user's source."""
+def is_container(entry: Plist) -> bool:
+    """An APFS container: a logical disk macOS makes from a partition or a whole disk image. The
+    disk or image it is made from is listed, so the container itself never is."""
+    return bool(entry.get("APFSPhysicalStores"))
+
+
+def _system_image(entry: Plist, info: Plist) -> bool:
+    """A disk image macOS attached for itself (its "Cryptex" security bundles)."""
     if info.get("BusProtocol") != "Disk Image":
         return False
     if entry.get("OSInternal") or info.get("OSInternalMedia"):
@@ -146,10 +151,40 @@ def is_system_image(entry: Plist, info: Plist) -> bool:
     return False
 
 
+def hidden_disks(entries: list[Plist], infos: dict[str, Plist]) -> set[str]:
+    """Disks that are not a user's source: APFS containers and other logical disks, and the disk
+    images macOS attaches for itself, together with the images that hold them."""
+    by_id = {str(e.get("DeviceIdentifier")): e for e in entries}
+    hidden: set[str] = set()
+    for ident, entry in by_id.items():
+        info = infos.get(ident, {})
+        if is_container(entry) or is_logical(info):
+            hidden.add(ident)
+        if _system_image(entry, info):
+            hidden.add(ident)
+            for store in entry.get("APFSPhysicalStores") or []:
+                if not isinstance(store, dict):
+                    continue
+                disk = whole_disk(str(store.get("DeviceIdentifier") or store.get("APFSPhysicalStore") or ""))
+                if disk in by_id and infos.get(disk, {}).get("BusProtocol") == "Disk Image":
+                    hidden.add(disk)  # the image holding macOS's container; never a physical disk
+    return hidden
+
+
+def visible_disks(listing: Any, fresh: bool = False) -> list[tuple[Plist, Plist]]:
+    """(``diskutil list`` entry, ``diskutil info``) of every disk a user could recover from."""
+    raw = listing.get("AllDisksAndPartitions") if isinstance(listing, dict) else None
+    entries = [e for e in raw or [] if isinstance(e, dict) and e.get("DeviceIdentifier")]
+    infos = {str(e["DeviceIdentifier"]): disk_info(str(e["DeviceIdentifier"])) if fresh else cached_disk_info(e)
+             for e in entries}
+    hidden = hidden_disks(entries, infos)
+    return [(e, infos[str(e["DeviceIdentifier"])]) for e in entries if str(e["DeviceIdentifier"]) not in hidden]
+
+
 def describe_disk(entry: Plist, info: Plist, system: set[str]) -> DeviceInfo | None:
     """One whole disk from ``diskutil list`` (``entry``) and ``diskutil info`` (``info``)."""
     ident = str(entry.get("DeviceIdentifier") or info.get("DeviceIdentifier") or "")
-    if not ident or is_logical(info) or is_system_image(entry, info):
+    if not ident or is_container(entry) or is_logical(info):
         return None
     size = int(info.get("TotalSize") or info.get("Size") or entry.get("Size") or 0)
     block = int(info.get("DeviceBlockSize") or 512)
@@ -182,10 +217,8 @@ def list_devices() -> list[DeviceInfo]:
         return []
     system = system_disks()
     devices = []
-    for entry in listing.get("AllDisksAndPartitions") or []:
-        if not isinstance(entry, dict) or not entry.get("DeviceIdentifier"):
-            continue
-        device = describe_disk(entry, cached_disk_info(entry), system)
+    for entry, info in visible_disks(listing):
+        device = describe_disk(entry, info, system)
         if device is not None:
             devices.append(device)
     return devices
