@@ -11,7 +11,7 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 - **Workaround:** split the selection by type (**All files** dropdown, then **Tick all shown**), about 1.75 TB per drive, and run one recovery per drive from the same scan.
 
 ### 2. Scan results are not saved (high)
-- **What happens:** results live only in the open window. Closing Lifeboat, installing an update, clicking another drive in Sources, or pressing Scan or Deep scan again throws them away. A deep scan of a 5 TB drive takes about 12 hours.
+- **What happens:** results live only in the open window. Closing Lifeboat, installing an update, clicking another drive in Sources, pressing Scan or Deep scan again, or the computer crashing (it happened during the Seagate recovery) throws them away. A deep scan of a 5 TB drive takes about 12 hours.
 - **Fix:** save every scan automatically (per drive, in the app data folder) and offer **Reopen last scan of this drive** when that drive is selected. An interrupted deep scan should continue where it stopped instead of starting over.
 - **Workaround:** keep the window open until every recovery from that scan is finished.
 
@@ -43,6 +43,18 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 
 ### 9. Deep scan and imaging each read the whole drive (idea)
 - **Fix:** an option to write a disk image during the deep scan, so a weak drive is read only once.
+
+### 10. A computer crash leaves no report (medium)
+- **What happens:** the HTML and CSV reports are written when the recovery ends. When Windows crashed during the Seagate recovery, the folder kept the recovered files but had no list of what was done, apart from Lifeboat's internal journal.
+- **Fix:** update the CSV report as files finish (every few seconds), and write the HTML report at the end.
+
+### 11. Resuming after a new scan depends on finding exactly the same files (medium)
+- **What happens:** files found by signature sit in a folder named "Files found by signature (8,508)", and that count is part of each file's identity. If a new deep scan finds 8,507 or 8,509 files, Resume recognises none of the files already recovered. It copies everything again, into a new folder.
+- **Fix:** identify files found by signature by their position on the drive and their size, not by the folder name.
+
+### 12. Signature search could save files while it scans (idea, speed)
+- **What happens:** a deep scan reads the whole drive (12 hours here), then the recovery reads the same data again.
+- **Fix:** an option to save each file found by signature as soon as it is found, so one pass over the drive both finds and recovers the files.
 
 ## Limitations (not supported yet)
 - Owner logo from zays.us: the build environment's network policy blocks the site. Add the logo as `lifeboat/assets/owner-logo.png`.
