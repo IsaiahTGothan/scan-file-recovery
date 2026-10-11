@@ -1,7 +1,8 @@
 name: Make Mac test disks
 
 # The unit tests read HFS+ and APFS disks that only macOS can write. When the script that makes
-# them changes, a Mac makes them again and commits them (the commit skips the other workflows).
+# them changes, a Mac makes the ones missing from tests/fixtures/apple (delete a disk's .img.gz to
+# make it again) and commits them (the commit skips the other workflows).
 on:
   push:
     paths:
@@ -33,7 +34,7 @@ jobs:
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: brew install afsctool || echo "afsctool is not available; ditto compresses instead"
       - name: Make the disks
-        run: sudo -E env "PATH=$PATH" "$(which python)" tests/macos/make_fixtures.py tests/fixtures/apple
+        run: sudo -E env "PATH=$PATH" "$(which python)" tests/macos/make_fixtures.py tests/fixtures/apple --missing
       - name: Commit them
         run: |
           sudo chown -R "$(id -u):$(id -g)" tests/fixtures/apple

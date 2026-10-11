@@ -13,10 +13,10 @@ What the disks hold, so the reader is tested on what real Macs produce:
   * a file in dozens of pieces (more than HFS+ keeps in the catalog), hard links, a symlink,
     a folder with hundreds of files (a multi-level catalog), a sparse file (APFS)
   * deleted files and folders; on APFS some deleted after a snapshot was taken, some not
-  * a second APFS volume that is encrypted with a password ("lifeboat")
+  * an APFS container with a second volume encrypted with a password ("lifeboat")
   * partition layouts: GPT, Apple Partition Map, and none
 
-Run on macOS as root (snapshots need it):  sudo python tests/macos/make_fixtures.py OUTDIR
+Run on macOS as root:  sudo python tests/macos/make_fixtures.py OUTDIR [--missing] [disk names]
 """
 
 from __future__ import annotations
@@ -44,7 +44,10 @@ DISKS = [
     ("hfsx_apm", "Case-sensitive Journaled HFS+", "SPUD", "32m", "LBHFSX"),
     ("hfsplus_bare", "HFS+", "NONE", "32m", "LBPLAIN"),
     ("apfs", "APFS", "GPTSPUD", "64m", "LBAPFS"),
+    # Two volumes need a container of over 512 MB; the second one is encrypted with a password.
+    ("apfs_locked", "APFS", "GPTSPUD", "600m", "LBOPEN"),
 ]
+SMALL = {"apfs_locked"}         # only a few files: this disk is about the encrypted volume
 
 
 def content(seed: str, size: int) -> bytes:
@@ -337,16 +340,20 @@ def make(out: Path, name: str, fs: str, layout: str, size: str, label: str) -> N
     d.notes.update(filesystem=fs, layout=layout, label=label, block_size=info.get("VolumeAllocationBlockSize"),
                    macos=subprocess.run(["sw_vers", "-productVersion"], capture_output=True,
                                         text=True).stdout.strip())
-    d.basics()
-    d.links()
-    d.forks()
-    d.compressed()
-    if apfs:
-        d.sparse()
-    d.sync()
-    d.fragmented()
-    d.deleted(snapshot=apfs)
-    if apfs:
+    if name in SMALL:
+        d.write("readme.txt", text("readme", 1234), mtime=T_OLD)
+        d.write("Photos/IMG_0001.HEIC", content("img1", 300 * KiB + 17), mtime=T_NEW)
+    else:
+        d.basics()
+        d.links()
+        d.forks()
+        d.compressed()
+        if apfs:
+            d.sparse()
+        d.sync()
+        d.fragmented()
+        d.deleted(snapshot=apfs)
+    if name in SMALL:
         container = info.get("APFSContainerReference", "")
         res = run(["diskutil", "apfs", "addVolume", container, "APFS", "LBLocked", "-passphrase", "lifeboat"],
                   check=False)
@@ -387,10 +394,16 @@ def main() -> None:
         raise SystemExit("macOS only")
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "tests/fixtures/apple")
     out.mkdir(parents=True, exist_ok=True)
-    only = set(sys.argv[2:])
+    args = sys.argv[2:]
+    missing = "--missing" in args            # keep the disks already made (delete one to remake it)
+    only = {a for a in args if not a.startswith("--")}
     for spec in DISKS:
-        if not only or spec[0] in only:
-            make(out, *spec)
+        if only and spec[0] not in only:
+            continue
+        if missing and (out / f"{spec[0]}.img.gz").exists():
+            print(f"{spec[0]}: already made", flush=True)
+            continue
+        make(out, *spec)
 
 
 if __name__ == "__main__":

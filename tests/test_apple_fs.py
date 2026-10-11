@@ -224,3 +224,26 @@ def test_wiped_start_of_drive(disks, tmp_path, name):
     lost = [v for v in result.volumes if v.found_by_deep_scan and v.volume is not None]
     assert lost and lost[0].volume.kind == ("APFS" if name == "apfs" else "HFS+")
     assert sum(1 for _ in result.root.files()) > 400
+
+
+def test_apfs_encrypted_volume_is_explained(disks):
+    """An encrypted volume next to an open one: the open one is read, the locked one is flagged and
+    explained (it can't be read without unlocking it on a Mac)."""
+    if "apfs_locked" not in disks:
+        pytest.skip("test disk not made yet")
+    image, manifest = disks["apfs_locked"]
+    if not isinstance(manifest["disk"].get("encrypted_volume"), dict):
+        pytest.skip(f"macOS didn't make the encrypted volume: {manifest['disk'].get('encrypted_volume')}")
+    result, reader, messages = _scan(image)
+    root = next(v.root for v in result.volumes if v.volume is not None)
+    assert root is not None
+    folders = {c.name: c for c in root.children or []}
+    locked = next(node for name, node in folders.items() if name.startswith("LBLocked"))
+    assert locked.flags & F.UNSUPPORTED and not locked.children
+    assert any("encrypted" in m for m in messages)
+    opened = next(node for name, node in folders.items() if name.startswith("LBOPEN"))
+    index = {"/".join(n.path_parts()[2:]): n for n in opened.walk() if not n.flags & F.DIR}
+    for item in manifest["files"]:
+        node = index[item["path"]]
+        data, complete = _content(result, reader, node)
+        assert complete and hashlib.sha256(data).hexdigest() == item["sha256"], item["path"]
