@@ -66,6 +66,7 @@ You can **Pause**, **Stop** (everything recovered so far is kept) or **Finish no
   The map records which drive the image belongs to. Lifeboat continues an image only for that drive and never overwrites an existing file that has no map (LB-309). If you moved the same drive to another USB adapter and it now reports a different serial number, tick **It is this same drive** (command line: `--same-drive`) to continue.
 * **Keep File Explorer, antivirus scans and backup software away from the failing drive** while Lifeboat works. They compete for the same weak heads.
 * **USB adapters matter.** If a drive keeps dropping off or shows the wrong size, try another cable, port or adapter. Lifeboat detects when an enclosure used 4 KB sectors and the dock shows 512-byte sectors (or the reverse) and adjusts automatically.
+* **Drive in Device Manager but not in Disk Management?** Click **Drive check** (top of *Sources*). It lists every storage device Windows detects, says for each one whether Disk Management can use it and whether its first sector reads, and explains what to try next: another cable, port, power supply or adapter, or a lab. A drive that is detected but doesn't report its size also stays in *Sources*, marked **CHECK**, instead of disappearing. The check only reads (one small read per drive, with a time limit) and leaves alone the drive a job is reading. **Copy report** puts the results on the clipboard, e.g. for a ticket.
 * **A drive that doesn't spin up or isn't detected at all** has a hardware fault (PCB, heads, motor). No software can read it; it needs a clean-room lab.
 * **BitLocker drives:** unlock the drive in Windows (password or recovery key), then select its **drive letter** under *Volumes*. Lifeboat then reads the decrypted data through Windows.
 
@@ -126,6 +127,7 @@ Not supported yet: browsing Mac (HFS+, APFS), Linux (ext2/3/4) and ReFS filesyst
 
 ```bat
 lifeboat-cli devices
+lifeboat-cli check
 lifeboat-cli scan \\.\PhysicalDrive2 --list
 lifeboat-cli recover \\.\PhysicalDrive2 D:\Recovered --include "*.jpg" --include "*.mp4"
 lifeboat-cli recover \\.\PhysicalDrive2 D:\Recovered --path "Users/Bob/Documents" --thoroughness maximum
@@ -134,7 +136,7 @@ lifeboat-cli image \\.\PhysicalDrive2 E:\drive2.img
 lifeboat-cli recover E:\drive2.img D:\Recovered --deleted-only
 ```
 
-Exit codes: `0` everything recovered, `1` finished with damaged or failed files, `2` failed (including no matching files), `3` bad arguments, `130` stopped with Ctrl+C.
+Exit codes: `0` everything recovered, `1` finished with damaged or failed files, `2` failed (including no matching files), `3` bad arguments, `130` stopped with Ctrl+C. `lifeboat-cli check` (the Drive check, `--json` for scripts) exits with `1` when a device needs attention.
 
 ## Adding the owner logo
 

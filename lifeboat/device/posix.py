@@ -18,7 +18,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 
 from ..errors import DeviceGoneError, DeviceHungError, DeviceOpenError, ReadError, ReadErrorKind
-from .base import BlockDevice, DeviceInfo, classify_posix_error
+from .base import NO_MEDIA, NOT_ANSWERING, BlockDevice, DeviceInfo, classify_posix_error
 
 _BLKGETSIZE64 = 0x80081272
 _BLKSSZGET = 0x1268
@@ -72,9 +72,12 @@ def _mounts() -> dict[str, list[str]]:
     return result
 
 
+SYSFS = Path("/sys")  # where the kernel lists devices (tests point it at a fake tree)
+
+
 def list_devices() -> list[DeviceInfo]:
     """Enumerate whole disks from /sys/block (Linux only)."""
-    base = Path("/sys/block")
+    base = SYSFS / "block"
     if not base.is_dir():
         return []
     mounts = _mounts()
@@ -84,9 +87,23 @@ def list_devices() -> list[DeviceInfo]:
         if re.match(r"^(ram|zram|sr|fd|md|dm-|nbd)", name):
             continue
         sectors = _read_text(entry / "size")
-        if not sectors.isdigit() or int(sectors) == 0:
+        if not sectors.isdigit():
             continue
         size = int(sectors) * 512
+        if not size:
+            # Detected but no size: a reader with no media, or a drive that doesn't answer.
+            if name.startswith("loop"):
+                continue  # an unused loop device
+            removable = _read_text(entry / "removable") == "1"
+            devices.append(DeviceInfo(
+                path=f"/dev/{name}", kind="disk", size=0,
+                model=_read_text(entry / "device" / "model") or name,
+                vendor=_read_text(entry / "device" / "vendor"),
+                bus="USB" if "/usb" in str(entry.resolve()) else "", removable=removable,
+                status=NO_MEDIA if removable else NOT_ANSWERING,
+                notes=["The system detects this drive, but it doesn't report a size, so it can't be read yet. "
+                       "Run a Drive check for what to try."]))
+            continue
         logical = int(_read_text(entry / "queue" / "logical_block_size") or 512)
         physical = int(_read_text(entry / "queue" / "physical_block_size") or logical)
         model = _read_text(entry / "device" / "model")

@@ -3,6 +3,7 @@
 Examples::
 
     lifeboat-cli devices
+    lifeboat-cli check
     lifeboat-cli scan \\\\.\\PhysicalDrive2 --list
     lifeboat-cli recover \\\\.\\PhysicalDrive2 D:\\Recovered --include "*.jpg" --include "*.docx"
     lifeboat-cli image \\\\.\\PhysicalDrive2 E:\\disk2.img
@@ -134,9 +135,32 @@ def cmd_devices(args: argparse.Namespace) -> int:
         print("No drives found (on Windows, run as administrator).")
     for d in devices:
         flags = " [system]" if d.system else ""
+        if d.status:
+            flags += " [no answer: run 'lifeboat-cli check']" if d.status == "not_answering" else " [no media]"
         vols = f"  {', '.join(d.volumes)}" if d.volumes else ""
-        print(f"{d.path:<22} {d.capacity_text:>9}  {d.bus:<8} {d.display_name}{flags}{vols}")
+        size = d.capacity_text if d.size else "-"
+        print(f"{d.path:<22} {size:>9}  {d.bus:<8} {d.display_name}{flags}{vols}")
     return 0
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    from .device.check import report_text, run_check
+
+    live = not args.json and sys.stderr.isatty()
+
+    def progress(index: int, total: int, name: str) -> None:
+        if live and name:
+            sys.stderr.write(f"\rChecking {index + 1}/{total}: {name[:60]}".ljust(90))
+            sys.stderr.flush()
+
+    results = run_check(progress)
+    if live:
+        sys.stderr.write("\r" + " " * 90 + "\r")
+    if args.json:
+        print(json.dumps([r.to_dict() for r in results], indent=1))
+    else:
+        print(report_text(results))
+    return 1 if any(r.level in ("warn", "bad") for r in results) else 0
 
 
 def _scan(args: argparse.Namespace, control: JobControl, console: Console):
@@ -268,6 +292,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("devices", help="list drives")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_devices)
+
+    p = sub.add_parser("check", help="drive check: every storage device the computer detects, whether it "
+                                     "answers, and what to try (exit code 1 when one needs attention)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_check)
 
     def source_args(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("source", help=r"drive (\\.\PhysicalDrive2, /dev/sdb) or image file")

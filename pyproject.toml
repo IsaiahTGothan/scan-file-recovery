@@ -58,7 +58,7 @@ check_untyped_defs = true
 exclude = ["tests/", "build/", "dist/"]
 
 [[tool.mypy.overrides]]
-module = ["lifeboat.device.windows", "lifeboat.recover.winverify"]
+module = ["lifeboat.device.windows", "lifeboat.device.pnp_windows", "lifeboat.device.check_windows", "lifeboat.recover.winverify"]
 ignore_errors = true
 
 [[tool.mypy.overrides]]

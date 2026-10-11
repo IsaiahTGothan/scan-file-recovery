@@ -79,6 +79,7 @@ ICONS: dict[str, str] = {
     "close": f'<path d="M6 6l12 12M18 6 6 18" {_S}/>',
     "lifebuoy": f'<circle cx="12" cy="12" r="9" {_S}/><circle cx="12" cy="12" r="4" {_S}/>'
                 f'<path d="m4.9 4.9 4.3 4.3M14.8 14.8l4.3 4.3M14.8 9.2l4.3-4.3M9.2 14.8l-4.3 4.3" {_S}/>',
+    "pulse": f'<path d="M2.5 12h4l2.5-6.5 4.5 13 2.8-6.5h5.2" {_S}/>',
 }
 
 APP_ICON_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">

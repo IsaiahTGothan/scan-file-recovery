@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 from ..errors import ReadErrorKind
 from ..util import format_capacity
 
+NOT_ANSWERING = "not_answering"
+NO_MEDIA = "no_media"
+
 
 @dataclass
 class SmartAttribute:
@@ -50,6 +53,13 @@ class DeviceInfo:
     label: str = ""
     filesystem: str = ""
     notes: list[str] = field(default_factory=list)
+    # "" when the drive answers; NOT_ANSWERING or NO_MEDIA when the system detects the drive but
+    # it doesn't report a size (such drives are listed so nobody wonders where they went).
+    status: str = ""
+
+    @property
+    def readable(self) -> bool:
+        return not self.status and self.size > 0
 
     @property
     def display_name(self) -> str:

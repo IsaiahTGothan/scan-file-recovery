@@ -31,7 +31,15 @@ from ..errors import (
     ReadError,
     ReadErrorKind,
 )
-from .base import BlockDevice, DeviceInfo, HealthInfo, SmartAttribute, classify_windows_error
+from .base import (
+    NO_MEDIA,
+    NOT_ANSWERING,
+    BlockDevice,
+    DeviceInfo,
+    HealthInfo,
+    SmartAttribute,
+    classify_windows_error,
+)
 
 if sys.platform != "win32":  # pragma: no cover - imported only on Windows
     raise ImportError("lifeboat.device.windows is only available on Windows")
@@ -377,12 +385,19 @@ def list_devices() -> list[DeviceInfo]:
             continue
         try:
             geo = _geometry_ex(handle)
+            length = _length_info(handle) if geo is None else None
             desc = _storage_descriptor(handle)
             align = _alignment(handle)
         finally:
             CloseHandle(handle)
-        if geo is None:
-            continue
+        if geo is None or not geo[0]:
+            # Windows detects the drive but it doesn't report a size: Disk Management won't show
+            # it and nothing can read it. List it anyway, with what that means.
+            if length:
+                geo = (length, align[0] if align else 512, 12)
+            else:
+                devices.append(_unreadable_disk(path, number, desc))
+                continue
         size, bps, media_type = geo
         logical, physical = align if align else (bps, bps)
         notes = []
@@ -423,6 +438,19 @@ def list_devices() -> list[DeviceInfo]:
             )
         )
     return devices
+
+
+def _unreadable_disk(path: str, number: int, desc: _Descriptor) -> DeviceInfo:
+    if desc.removable:
+        status, note = NO_MEDIA, ("This is a card reader or removable-media drive with nothing readable in it. "
+                                  "If a card is inserted, try another reader: a card no reader detects has failed.")
+    else:
+        status, note = NOT_ANSWERING, ("Windows detects this drive, but the drive doesn't answer: it doesn't "
+                                       "report its size, so Disk Management can't show it and nothing can read it "
+                                       "yet. Run a Drive check for what to try.")
+    return DeviceInfo(path=path, kind="disk", size=0, model=desc.product, vendor=desc.vendor, serial=desc.serial,
+                      revision=desc.revision, bus=desc.bus, removable=desc.removable, disk_number=number,
+                      status=status, notes=[note])
 
 
 class _Buffer:

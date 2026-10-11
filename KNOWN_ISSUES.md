@@ -1,6 +1,6 @@
 # Known issues and to-do
 
-Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted for Mac (HFS+), a deep scan of about 12 hours, 8,508 files (3.41 TB) found by signature, and a destination with 1.82 TB free. Nothing below has been changed in the software yet.
+Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted for Mac (HFS+), a deep scan of about 12 hours, 8,508 files (3.41 TB) found by signature, and a destination with 1.82 TB free. The open issues below haven't been changed in the software yet; the fixed ones are listed at the end.
 
 ## Open issues
 
@@ -56,10 +56,6 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 - **What happens:** a deep scan reads the whole drive (12 hours here), then the recovery reads the same data again.
 - **Fix:** an option to save each file found by signature as soon as it is found, so one pass over the drive both finds and recovers the files.
 
-### 13. Drives that Windows detects but can't read are hidden (high)
-- **What happens:** a failing drive often shows in Device Manager (as the USB adapter, or under "Disk drives") but not in Disk Management, because the drive itself doesn't answer. Lifeboat's drive list skips any drive that can't report its size, so it hides exactly these drives without a word.
-- **Fix:** a **Drive check** that lists every storage device Device Manager shows: USB storage adapters, disk drives, and devices with errors such as Code 43 or Code 10. For each one it says whether Disk Management can see it, whether its first sector reads, and what to try next (another adapter, cable, port or power supply, or a lab). Drives that don't report a size stay in the Sources list as "Detected, not answering" instead of disappearing.
-
 ## Limitations (not supported yet)
 - Owner logo from zays.us: the build environment's network policy blocks the site. Add the logo as `lifeboat/assets/owner-logo.png`.
 - Not code-signed: Windows SmartScreen warns on first run.
@@ -69,6 +65,7 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 - Physical damage (clicking, not spinning up, not detected) needs a clean-room lab.
 
 ## Fixed on October 11, 2026
+- Drives that Windows detects but can't read were hidden: the drive list skipped any drive that didn't report its size, which is exactly what a failing drive does when it shows in Device Manager but not in Disk Management. Now such drives stay in Sources, marked **CHECK** ("Not answering", or "No media" for an empty card reader), and the new **Drive check** lists every storage device Device Manager shows (disk drives, USB storage adapters with no drive behind them, and devices with errors such as Code 43 or Code 10). For each one it says whether Disk Management can use it and whether its first sector reads, and what to try next. Also on the command line: `lifeboat-cli check`.
 - A drive waking up from sleep was reported as "The source drive disconnected" (red error and pop-up), although it answered again two seconds later. Now a drive that stops answering gets up to 30 seconds to come back. Lifeboat notes the wait in the Activity log, reads again, and reports a disconnect only if the drive is still gone after that.
 
 ## Fixed in the build from commit fb50af8 (October 9, 2026)

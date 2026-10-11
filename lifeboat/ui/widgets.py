@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..device.base import DeviceInfo
+from ..device.base import NO_MEDIA, NOT_ANSWERING, DeviceInfo
 from ..events import Choice, Event, Level
 from ..fs.model import F, Node
 from ..rescue.sectormap import PARTIAL, SectorMap, State
@@ -49,8 +49,13 @@ def device_icon_name(info: DeviceInfo) -> str:
     return "hdd"
 
 
+STATUS_TEXT = {NOT_ANSWERING: "Not answering", NO_MEDIA: "No media"}
+
+
 def device_subtitle(info: DeviceInfo) -> str:
     parts = []
+    if info.status:
+        parts.append(STATUS_TEXT.get(info.status, "Not readable"))
     if info.kind == "image":
         parts.append("Disk image")
     elif info.kind == "volume":
@@ -84,37 +89,43 @@ class SourceDelegate(QStyledItemDelegate):
             painter.setBrush(QColor(t.selection if selected else t.panel_alt))
             painter.drawRoundedRect(rect, 8, 8)
         icon_name = device_icon_name(info)
-        tint = t.accent if selected else t.text
+        status_colour = {NOT_ANSWERING: t.bad, NO_MEDIA: t.muted}.get(info.status, t.muted)
+        tint = status_colour if info.status else (t.accent if selected else t.text)
         painter.drawPixmap(rect.left() + 10, rect.top() + 12, icons.pixmap(icon_name, 26, tint))
         text_left = rect.left() + 48
-        title_font = QFont(option.font)
-        title_font.setBold(True)
-        painter.setFont(title_font)
-        painter.setPen(QColor(t.text))
-        title = info.display_name if info.kind != "disk" or info.disk_number is None else \
-            f"{info.display_name}"
-        title_rect = QRect(text_left, rect.top() + 7, rect.width() - 56, 20)
-        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                         painter.fontMetrics().elidedText(title, Qt.TextElideMode.ElideRight, title_rect.width()))
-        painter.setFont(option.font)
-        painter.setPen(QColor(t.muted))
-        sub_rect = QRect(text_left, rect.top() + 27, rect.width() - 56, 18)
-        subtitle = device_subtitle(info)
-        painter.drawText(sub_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                         painter.fontMetrics().elidedText(subtitle, Qt.TextElideMode.ElideRight, sub_rect.width()))
+        badge = ""
         if info.system:
             badge = "SYSTEM DISK" if info.kind == "disk" else "SYSTEM"
+        elif info.status == NOT_ANSWERING:
+            badge = "CHECK"
+        badge_width = 0
+        if badge:
             font = QFont(option.font)
             font.setPointSizeF(max(6.5, option.font.pointSizeF() - 2.5))
             font.setBold(True)
             painter.setFont(font)
-            width = painter.fontMetrics().horizontalAdvance(badge) + 12
-            badge_rect = QRect(rect.right() - width - 6, rect.top() + 8, width, 16)
+            badge_width = painter.fontMetrics().horizontalAdvance(badge) + 12
+            badge_rect = QRect(rect.right() - badge_width - 6, rect.top() + 8, badge_width, 16)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(t.border))
+            painter.setBrush(QColor(t.bad if info.status == NOT_ANSWERING else t.border))
             painter.drawRoundedRect(badge_rect, 8, 8)
-            painter.setPen(QColor(t.muted))
+            painter.setPen(QColor("#ffffff" if info.status == NOT_ANSWERING else t.muted))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge)
+            badge_width += 10
+        title_font = QFont(option.font)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.setPen(QColor(t.text))
+        title_rect = QRect(text_left, rect.top() + 7, rect.width() - 56 - badge_width, 20)
+        painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         painter.fontMetrics().elidedText(info.display_name, Qt.TextElideMode.ElideRight,
+                                                          title_rect.width()))
+        painter.setFont(option.font)
+        painter.setPen(QColor(status_colour if info.status == NOT_ANSWERING else t.muted))
+        sub_rect = QRect(text_left, rect.top() + 27, rect.width() - 56, 18)
+        subtitle = device_subtitle(info)
+        painter.drawText(sub_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         painter.fontMetrics().elidedText(subtitle, Qt.TextElideMode.ElideRight, sub_rect.width()))
         painter.restore()
 
 
@@ -140,7 +151,10 @@ class SourceList(QListWidget):
     def set_devices(self, devices: list[DeviceInfo], keep: str | None = None) -> None:
         self.blockSignals(True)
         self.clear()
-        sections = [("Drives", [d for d in devices if d.kind == "disk"]),
+        disks = [d for d in devices if d.kind == "disk"]
+        # Empty card readers last: they're listed (a card no reader detects looks the same), but rarely the point.
+        disks.sort(key=lambda d: d.status == NO_MEDIA)
+        sections = [("Drives", disks),
                     ("Volumes (drive letters)", [d for d in devices if d.kind == "volume"]),
                     ("Disk images", [d for d in devices if d.kind == "image"])]
         reselect = None

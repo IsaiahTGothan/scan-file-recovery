@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..branding import APP_FULL_NAME, APP_NAME, PUBLISHER, TAGLINE, owner_logo
-from ..device.base import BlockDevice, DeviceInfo
+from ..device.base import NO_MEDIA, NOT_ANSWERING, BlockDevice, DeviceInfo
 from ..device.enumerate import is_admin, list_devices, open_device
 from ..device.image import ImageDevice
 from ..errors import LifeboatError, describe
@@ -66,6 +66,7 @@ from .dialogs import (
     setting,
     setting_float,
 )
+from .drive_check import DriveCheckDialog
 from .models import (
     CATEGORIES,
     EventModel,
@@ -248,9 +249,12 @@ class MainWindow(QMainWindow):
         title.setObjectName("SectionTitle")
         head.addWidget(title)
         head.addStretch(1)
+        self.btn_check = _tool("Drive check", "pulse", "Find drives the computer detects but can't read, and "
+                                                       "what to try (also: is a drive in Disk Management?)")
+        head.addWidget(self.btn_check)
         self.btn_refresh = QToolButton()
         self.btn_refresh.setIcon(icons.icon("refresh"))
-        self.btn_refresh.setToolTip("Look for drives again")
+        self.btn_refresh.setToolTip("Look for drives again (F5)")
         head.addWidget(self.btn_refresh)
         layout.addLayout(head)
         self.sources = SourceList()
@@ -320,6 +324,15 @@ class MainWindow(QMainWindow):
         safety.setWordWrap(True)
         safety.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(safety)
+        missing = QHBoxLayout()
+        missing_text = QLabel("<b>Drive not in the list?</b> It may be detected by the computer but not answering. "
+                              "A Drive check shows every drive the computer detects and what to try.")
+        missing_text.setWordWrap(True)
+        missing_text.setTextFormat(Qt.TextFormat.RichText)
+        self.welcome_check = QPushButton(icons.icon("pulse"), "Run a Drive check")
+        missing.addWidget(missing_text, 1)
+        missing.addWidget(self.welcome_check)
+        layout.addLayout(missing)
         self.welcome_admin = QLabel()
         self.welcome_admin.setWordWrap(True)
         self.welcome_admin.setStyleSheet(f"color:{t.warn}")
@@ -364,7 +377,9 @@ class MainWindow(QMainWindow):
         self.ov_image = QPushButton(icons.icon("clone"), "Create disk image")
         self.ov_admin = QPushButton(icons.icon("lock"), "Restart as administrator")
         self.ov_admin.setVisible(False)
-        for b in (self.ov_scan, self.ov_deep, self.ov_image, self.ov_admin):
+        self.ov_check = QPushButton(icons.icon("pulse"), "Run a Drive check")
+        self.ov_check.setVisible(False)
+        for b in (self.ov_scan, self.ov_deep, self.ov_image, self.ov_admin, self.ov_check):
             b.setMinimumHeight(38)
             actions.addWidget(b)
         actions.addStretch(1)
@@ -566,6 +581,8 @@ class MainWindow(QMainWindow):
         for button in (self.btn_image, self.ov_image):
             button.clicked.connect(self.create_image)
         self.ov_admin.clicked.connect(self.restart_as_admin)
+        for button in (self.btn_check, self.welcome_check, self.ov_check):
+            button.clicked.connect(self.open_drive_check)
         self.btn_recover.clicked.connect(self.recover)
         self.btn_settings.clicked.connect(self.open_settings)
         self.btn_help.clicked.connect(self._show_about)
@@ -643,7 +660,13 @@ class MainWindow(QMainWindow):
         new = {d.identity for d in devices} - {d.identity for d in self.devices}
         if self.devices and new:
             for d in devices:
-                if d.identity in new and d.kind == "disk":
+                if d.identity not in new or d.kind != "disk":
+                    continue
+                if d.status == NOT_ANSWERING:
+                    self.toasts.show("warning", "Drive detected, not answering",
+                                     f"{d.title} doesn't report its size. Select it, or run a Drive check, for "
+                                     "what to try.")
+                elif not d.status:
                     self.toasts.show("info", "Drive connected", f"{d.title} ({d.capacity_text})")
         self.devices = devices
         self.sources.set_devices(devices + self.images, keep)
@@ -673,6 +696,14 @@ class MainWindow(QMainWindow):
         self._close_source()
         self.info = info
         self.open_error = None
+        if info.status:
+            # Detected but not answering (or no media): there's nothing to open. Say so and offer the check.
+            self.diskmap.set_map(None)
+            self.legend.update_totals(None)
+            self._show_overview()
+            self.pages.setCurrentIndex(1)
+            self._update_actions()
+            return
         try:
             self.device = self._open(info)
             policy = ReadPolicy(timeout=setting_float("read_timeout", 15))
@@ -744,7 +775,7 @@ class MainWindow(QMainWindow):
             bits.append(f"serial {info.serial}")
         self.ov_sub.setText(" · ".join(b for b in bits if b))
         size = self.device.size if self.device is not None else info.size
-        self.card_capacity.set(info.capacity_text if size else "-")
+        self.card_capacity.set(info.capacity_text if size else ("Not reported" if info.status else "-"))
         if self.device is not None:
             self.card_sectors.set(f"{self.device.sector_size} / {self.device.physical_sector_size}")
         else:
@@ -752,6 +783,15 @@ class MainWindow(QMainWindow):
         self.card_bus.set(info.bus or ("Image file" if info.kind == "image" else "-"))
         self.card_health.set("Checking…" if info.kind == "disk" and self.device is not None else "Not available")
         notes = []
+        if info.status == NOT_ANSWERING:
+            notes.append(f"<p style='color:{t.bad}'><b>The computer detects this drive, but the drive doesn't "
+                         "answer.</b> It doesn't report its size, so it can't be scanned or imaged yet.</p>"
+                         "<p>Run a <b>Drive check</b>: it tells you what the computer sees of this drive and what "
+                         "to try (cable, port, power supply, another adapter).</p>")
+        elif info.status == NO_MEDIA:
+            notes.append("<p><b>No media.</b> This is a card reader or removable-media drive with nothing readable "
+                         "in it. If a card is inserted, try another reader: a card that no reader detects has "
+                         "failed.</p>")
         if self.open_error is not None:
             hint = describe(self.open_error.code).hint
             notes.append(f"<p style='color:{t.bad}'><b>Cannot open this source.</b> {self.open_error.message}</p>")
@@ -763,13 +803,15 @@ class MainWindow(QMainWindow):
         if info.kind == "volume":
             notes.append("<p>Reading a drive letter goes through Windows, which decrypts BitLocker volumes that "
                          "you have unlocked. For damaged drives, select the physical drive instead.</p>")
-        for note in info.notes:
-            notes.append(f"<p>{note}</p>")
-        notes.append("<p><b>Recommended:</b> run <b>Scan</b> first. If the drive is slow, makes noises or "
-                     "disconnects, stop and <b>Create a disk image</b> instead, then recover from the image.</p>")
+        if not info.status:  # a drive with a status has its explanation above already
+            for note in info.notes:
+                notes.append(f"<p>{note}</p>")
+            notes.append("<p><b>Recommended:</b> run <b>Scan</b> first. If the drive is slow, makes noises or "
+                         "disconnects, stop and <b>Create a disk image</b> instead, then recover from the image.</p>")
         self.ov_notes.setHtml("".join(notes))
         self.ov_admin.setVisible(self.open_error is not None and self.open_error.code == "LB-101"
                                  and sys.platform == "win32")
+        self.ov_check.setVisible(bool(info.status) or (self.open_error is not None and info.kind == "disk"))
 
     def _health_ready(self, health: object) -> None:
         t = current()
@@ -797,6 +839,33 @@ class MainWindow(QMainWindow):
         self.images = [i for i in self.images if i.path != info.path] + [info]
         self.sources.set_devices(self.devices + self.images, info.identity)
         self.select_source(info)
+
+    def open_drive_check(self) -> None:
+        in_use: dict[str, int] = {}
+        if self.job is not None and self.info is not None and self.info.kind in ("disk", "volume"):
+            # Leave the drive a job is reading alone: one extra read could time out and look like a failure.
+            if self.info.kind == "disk":
+                in_use[self.info.path] = self.info.size
+            elif self.info.disk_number is not None:
+                for d in self.devices:
+                    if d.kind == "disk" and d.disk_number == self.info.disk_number:
+                        in_use[d.path] = d.size
+        dialog = DriveCheckDialog(self, in_use)
+        dialog.exec()
+        chosen, restart = dialog.chosen_path, dialog.restart_requested
+        dialog.deleteLater()
+        if restart:
+            self.restart_as_admin()
+            return
+        if chosen:
+            match = next((d for d in self.devices if d.kind == "disk" and d.path == chosen and not d.status), None)
+            if match is None:
+                self.toasts.show("info", "Looking for the drive",
+                                 "It isn't in Sources yet. Select it there as soon as it appears.")
+            else:
+                self.sources.set_devices(self.devices + self.images, match.identity)
+                self.select_source(match)
+        self.refresh_devices()
 
     def restart_as_admin(self) -> None:
         if sys.platform != "win32":

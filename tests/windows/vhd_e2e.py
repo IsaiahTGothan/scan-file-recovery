@@ -202,7 +202,9 @@ def cmd_verify_api() -> None:
               f"bus={d.bus} model={d.model!r} serial={d.serial!r} vols={d.volumes} system={d.system}")
     disk = next(d for d in devices if d.kind == "disk" and d.disk_number == state["disk"])
     assert disk.size == 512 * MiB, disk.size
+    assert not disk.status and disk.readable, disk.status
     assert any(d.system for d in devices if d.kind == "disk"), "the Windows disk should be flagged"
+    _verify_drive_check(state["disk"], disk.path)
     bus = EventBus()
     bus.subscribe(lambda e: print(f"  [{e.level.name}] {e.message}", flush=True))
     device = open_device(disk)
@@ -265,12 +267,46 @@ def cmd_verify_api() -> None:
     print("verify-api OK", flush=True)
 
 
+def _verify_drive_check(number: int, path: str) -> None:
+    """The Drive check finds the test disk in Device Manager's list, sees its size and reads it."""
+    from lifeboat.device.check import run_check
+    from lifeboat.device.pnp_windows import storage_devices
+
+    pnp = storage_devices()
+    for dev in pnp:
+        print(f"  pnp: {dev.name!r} class={dev.device_class} service={dev.service} enum={dev.enumerator} "
+              f"problem={dev.problem} disk={dev.disk_number} id={dev.instance_id}", flush=True)
+    assert any(d.is_disk and d.disk_number == number for d in pnp), "the test disk should be in the device list"
+    progress = []
+    results = run_check(lambda i, n, name: progress.append((i, n, name)))
+    for r in results:
+        print(f"  check: {r.name!r} kind={r.kind} path={r.path} size={r.size} conn={r.connection!r} "
+              f"verdict={r.verdict} read={r.read_text} problem={r.problem_code}", flush=True)
+    vhd = next(r for r in results if r.kind == "disk" and r.disk_number == number)
+    assert vhd.verdict == "readable", vhd.to_dict()
+    assert vhd.seen_by_system and vhd.size == 512 * MiB and vhd.path == path, vhd.to_dict()
+    assert vhd.instance_id, "the disk should be matched with its Device Manager entry"
+    assert progress and progress[-1][0] == progress[-1][1], progress[-3:]
+    system = [r for r in results if r.kind == "disk" and r.verdict in ("readable", "slow")]
+    assert len(system) >= 2, "the Windows disk should read too"
+    # A disk a job is reading is listed but left alone.
+    busy = next(r for r in run_check(in_use={path: vhd.size}) if r.path == path)
+    assert busy.verdict == "in_use" and busy.read_ok is None, busy.to_dict()
+    print("drive check OK", flush=True)
+
+
 def cmd_verify_cli(exe: str) -> None:
     state = _state()
     dest = WORK / "cli-out"
     shutil.rmtree(dest, ignore_errors=True)
     run([exe, "--version"])
     run([exe, "devices"])
+    res = run([exe, "check", "--json"], check=False)
+    assert res.returncode in (0, 1), f"lifeboat-cli check exited with {res.returncode}"
+    checked = json.loads(res.stdout)
+    vhd = next(r for r in checked if r["kind"] == "disk" and r["disk_number"] == state["disk"])
+    assert vhd["verdict"] == "readable" and vhd["seen_by_system"], vhd
+    run([exe, "check"], check=False)
     res = run([exe, "recover", f"\\\\.\\PhysicalDrive{state['disk']}", str(dest), "--no-job-folder", "-q"],
               check=False)
     assert res.returncode == 0, f"lifeboat-cli exited with {res.returncode}"

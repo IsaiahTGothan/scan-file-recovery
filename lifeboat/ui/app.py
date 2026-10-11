@@ -138,12 +138,13 @@ def _exercise_dialogs(window: QWidget) -> None:
         SettingsDialog,
         SummaryDialog,
     )
+    from .drive_check import DriveCheckDialog
 
     disk = DeviceInfo(path=r"\\.\PhysicalDrive9", kind="disk", size=1 << 30, model="Smoke test", serial="0")
     dialogs = [
         RecoverDialog(window, disk, 3, 3000, 0, 0, 1000), ImageDialog(window, disk), DeepScanDialog(window, disk),
         SettingsDialog(window), AboutDialog(window), ErrorDialog(window, "Smoke test", "Not a real error."),
-        SummaryDialog(window, RecoverySummary("", [], 0.0)),
+        SummaryDialog(window, RecoverySummary("", [], 0.0)), DriveCheckDialog(window),
     ]
     for dialog in dialogs:
         dialog.show()

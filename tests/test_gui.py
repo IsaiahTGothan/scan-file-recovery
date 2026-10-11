@@ -525,3 +525,133 @@ def test_source_list_changes_during_a_job_do_not_loop(app, tmp_path, monkeypatch
         window.job = None
     assert not unhandled, unhandled
     window.close()
+
+
+def _check_results():
+    from lifeboat.device.check import CheckResult
+
+    return [CheckResult("Healthy SSD", size=1 << 30, read_ok=True, read_seconds=0.01, path="/dev/sdd"),
+            CheckResult("Seagate Portable", size=0, connection="USB", path="/dev/sdb"),
+            CheckResult("JMicron bridge", kind="adapter", connection="USB")]
+
+
+def _wait_for(app, condition, timeout=10):
+    end = time.time() + timeout
+    while not condition() and time.time() < end:
+        _pump(app, 0.02)
+    assert condition()
+
+
+def test_drive_check_window(app):
+    from lifeboat.ui.drive_check import DriveCheckDialog
+
+    results = _check_results()
+    calls = []
+
+    def runner(progress, in_use):
+        calls.append(dict(in_use))
+        for index, result in enumerate(results):
+            progress(index, len(results), result.name)
+        return results
+
+    dialog = DriveCheckDialog(None, {"/dev/sdx": 123}, runner=runner)
+    dialog.show()
+    _wait_for(app, lambda: dialog.table.rowCount() == 3)
+    assert calls == [{"/dev/sdx": 123}]
+    assert dialog.status.text() == "3 devices found · 1 readable · 2 need attention"
+    # It opens on the first device that needs attention, with its advice.
+    assert dialog.table.currentRow() == 1
+    assert "doesn't answer" in dialog.details.toPlainText()
+    assert dialog.table.item(1, 3).text() == "No" and dialog.table.item(1, 2).text() == "Not reported"
+    assert not dialog.btn_use.isEnabled()
+    dialog.table.setCurrentCell(0, 0)
+    assert dialog.btn_use.isEnabled()
+    for expected in ("Healthy SSD", "Seagate Portable", "Adapter only, no drive", "What to do:"):
+        assert expected in dialog.report()
+    dialog._copy()
+    assert "Seagate Portable" in QtWidgets.QApplication.clipboard().text()
+    dialog._use()
+    assert dialog.chosen_path == "/dev/sdd" and dialog.result() == dialog.DialogCode.Accepted
+
+
+def test_drive_check_window_closed_while_checking(app):
+    import threading
+
+    from lifeboat.ui.drive_check import DriveCheckDialog
+
+    gate = threading.Event()
+    reached = []
+
+    def runner(progress, in_use):
+        progress(0, 2, "first")
+        gate.wait(5)
+        reached.append("after")
+        progress(1, 2, "second")  # the window is closed: this stops the check
+        reached.append("not reached")
+        return _check_results()
+
+    dialog = DriveCheckDialog(None, runner=runner)
+    dialog.show()
+    _pump(app, 0.2)
+    assert dialog.running and dialog.status.text() == "Checking first…"
+    dialog.reject()
+    gate.set()
+    dialog._thread.join(5)
+    _pump(app, 0.2)
+    assert reached == ["after"]
+    assert dialog.table.rowCount() == 0  # nothing reported after closing
+    dialog.deleteLater()
+    _pump(app, 0.1)
+
+
+def test_drive_check_failure_is_shown(app):
+    from lifeboat.ui.drive_check import DriveCheckDialog
+
+    def runner(progress, in_use):
+        raise OSError("Windows did not return its device list")
+
+    dialog = DriveCheckDialog(None, runner=runner)
+    _wait_for(app, lambda: dialog.btn_again.isEnabled())
+    assert dialog.status.text() == "The check couldn't finish"
+    assert "device list" in dialog.details.toPlainText()
+
+
+def test_drive_that_does_not_answer_is_listed_and_explained(app, monkeypatch):
+    import lifeboat.ui.main_window as mw
+    from lifeboat.device.base import NOT_ANSWERING
+
+    window = mw.MainWindow()
+    window.show()
+    _pump(app, 0.1)
+    drive = DeviceInfo(path="/dev/sdz", kind="disk", size=0, model="Portable", vendor="Seagate", bus="USB",
+                       status=NOT_ANSWERING, notes=["Run a Drive check for what to try."])
+    window._enum_running = False
+    window.devices = []
+    window._devices_ready([drive])
+    problems_before = window.problems_model.rowCount()
+    window.select_source(drive)
+    assert window.device is None and window.reader is None and window.info is drive
+    assert window.pages.currentIndex() == 1
+    assert window.problems_model.rowCount() == problems_before  # explained, not reported as an error
+    assert "doesn't answer" in window.ov_notes.toPlainText()
+    assert window.card_capacity.value.text() == "Not reported"
+    assert not window.ov_check.isHidden() and not window.btn_scan.isEnabled()
+
+    opened = []
+
+    class FakeCheck:
+        def __init__(self, parent, in_use):
+            opened.append(in_use)
+            self.chosen_path = None
+            self.restart_requested = False
+
+        def exec(self):
+            return 0
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(mw, "DriveCheckDialog", FakeCheck)
+    window.ov_check.click()
+    assert opened == [{}]  # no job running: nothing is left out of the check
+    window.close()
