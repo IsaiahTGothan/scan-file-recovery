@@ -58,7 +58,7 @@ Requirements: Windows 10 or 11, 64-bit.
 
 Requirements: macOS 14 (Sonoma) or later.
 
-On a Mac, Lifeboat lists every physical drive (and attached disk images) with its name, size and connection, reads through the raw device (`/dev/rdiskN`), and has the same Drive check. The command line tool is inside the app: `sudo /Applications/Lifeboat.app/Contents/MacOS/lifeboat-cli devices`.
+On a Mac, Lifeboat lists every physical drive (and attached disk images) with its name, size and connection, reads through the raw device (`/dev/rdiskN`), and has the same Drive check. Mac drives (HFS+ and APFS, including Time Machine disks) are browsed with their real names and folders on both Mac and Windows; encrypted APFS volumes have to be unlocked on a Mac first. The command line tool is inside the app: `sudo /Applications/Lifeboat.app/Contents/MacOS/lifeboat-cli devices`.
 
 Mac tips: if macOS says "The disk you attached was not readable by this computer", click **Ignore**, never **Initialize**, and don't run **First Aid** on a failing drive (both write to it). Spotlight starts indexing every drive you connect; on a failing drive that's a lot of extra reading, so add its volume under **System Settings → Spotlight → Search Privacy**, or keep it unmounted.
 
