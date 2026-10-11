@@ -8,6 +8,7 @@ __pycache__/
 .pytest_cache/
 
 # Build output
+lifeboat/_build.py
 build/
 dist/
 *.spec.bak

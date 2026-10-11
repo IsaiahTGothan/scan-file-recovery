@@ -11,4 +11,13 @@ The package is split into layers that only depend downward:
     ui       PySide6 desktop application
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
+
+
+def build_info() -> str:
+    """The version, plus the build number and commit for copies built by CI: "1.1.0 (build 19, a8fa2e7)"."""
+    try:
+        from ._build import BUILD, COMMIT  # written by packaging/stamp_build.py
+    except ImportError:
+        return __version__
+    return f"{__version__} (build {BUILD}, {COMMIT})"

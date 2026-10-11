@@ -75,10 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationVersion(__version__)
     app.setQuitOnLastWindowClosed(True)
 
-    from . import icons, theme
-    from .dialogs import ErrorDialog, setting
+    from . import icons
+    from .dialogs import ErrorDialog, apply_appearance
 
-    theme.apply(app, str(setting("theme", "dark")))
+    apply_appearance(app)
     app.setWindowIcon(icons.app_icon())
 
     def excepthook(kind: type[BaseException], value: BaseException, tb: TracebackType | None) -> None:
@@ -135,10 +135,10 @@ def _exercise_dialogs(window: QWidget) -> None:
         ErrorDialog,
         ImageDialog,
         RecoverDialog,
-        SettingsDialog,
         SummaryDialog,
     )
     from .drive_check import DriveCheckDialog
+    from .settings_dialog import SettingsDialog
 
     disk = DeviceInfo(path=r"\\.\PhysicalDrive9", kind="disk", size=1 << 30, model="Smoke test", serial="0")
     dialogs = [

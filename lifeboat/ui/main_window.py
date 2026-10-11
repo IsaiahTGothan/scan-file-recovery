@@ -7,6 +7,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import cast
 
 from PySide6.QtCore import QModelIndex, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QColor, QKeySequence
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -46,25 +48,29 @@ from ..device.image import ImageDevice
 from ..errors import LifeboatError, describe
 from ..events import Event, EventBus, Level, Progress
 from ..fs.content import OK, FileContentReader
-from ..fs.model import Node
+from ..fs.model import F, FileLayout, Node
 from ..imaging import ImagingJob, ImagingOptions, ImagingSummary
-from ..recover import RecoveryJob, RecoveryOptions, RecoverySummary
+from ..power import KeepAwake
+from ..recover import RecoveryJob, RecoveryOptions, RecoverySummary, Status
+from ..recover.destination import free_space
 from ..rescue.reader import ReadMode, ReadPolicy, RescueReader
 from ..rescue.sectormap import SectorMap, State
 from ..scan import Scanner, ScanOptions, ScanResult
 from ..util import format_duration, format_rate, format_size
-from . import icons
+from . import icons, ticking
 from .bridge import Bridge, Job, PendingDecision, connect_events
 from .dialogs import (
+    FIT_RESULT,
     AboutDialog,
     DeepScanDialog,
     ErrorDialog,
     ImageDialog,
     RecoverDialog,
-    SettingsDialog,
     SummaryDialog,
+    apply_appearance,
+    pref,
+    pref_float,
     setting,
-    setting_float,
 )
 from .drive_check import DriveCheckDialog
 from .models import (
@@ -78,10 +84,13 @@ from .models import (
     ViewFilter,
     category,
 )
+from .settings_dialog import SettingsDialog
 from .theme import current
 from .widgets import (
     Banner,
+    CategoryChips,
     DiskMap,
+    JobPanel,
     MapLegend,
     PreviewPane,
     SourceList,
@@ -95,6 +104,9 @@ from .widgets import (
 
 log = logging.getLogger("lifeboat.ui")
 FOUR_GB = (4 << 30) - 1
+LONG_JOBS = ("scan", "deep", "recover", "image")  # jobs that can take hours
+JOB_ICONS = {"scan": "search", "deep": "radar", "recover": "recover", "image": "clone"}
+_RANK = {Status.OK: 3, Status.PARTIAL: 2, Status.FAILED: 1}  # a later run never "forgets" an earlier success
 
 
 def _tool(text: str, icon_name: str, tip: str) -> QToolButton:
@@ -120,8 +132,9 @@ class MainWindow(QMainWindow):
         self.bridge = Bridge()
         connect_events(self.bus, self.bridge)
         self.selection = Selection()
-        self.selection.filter.show_system = bool(setting("show_system", False))
+        self.selection.filter.show_system = bool(pref("show_system"))
         self.selection.filter.show_streams = self.selection.filter.show_system
+        self.power = KeepAwake()
         self.devices: list[DeviceInfo] = []
         self.images: list[DeviceInfo] = []
         self.info: DeviceInfo | None = None
@@ -137,8 +150,14 @@ class MainWindow(QMainWindow):
         self._held_errors = 0
         self._enum_running = False
         self._selecting = False
+        self._positions: dict[int, int] = {}       # file -> where its data starts on the drive (by id)
+        self._pending_tick: tuple[str, object, list[Node]] | None = None  # waits for the positions
+        self._recover_after_tick = False           # "Tick only what fits" from the Recover dialog
+        self._remaining: list[Node] = []           # files being split across drives: what's left is offered
         self._build()
         self._connect()
+        self.diskmap.set_mode(str(pref("map_animation")))
+        self._apply_row_heights()
         self.toasts = ToastArea(self.centralWidget())
         self._toast_timer = QTimer(self)
         self._toast_timer.setSingleShot(True)
@@ -170,6 +189,8 @@ class MainWindow(QMainWindow):
         body_layout.setSpacing(10)
         self.banner = Banner()
         body_layout.addWidget(self.banner)
+        self.job_panel = JobPanel()
+        body_layout.addWidget(self.job_panel)
         self.vsplit = QSplitter(Qt.Orientation.Vertical)
         self.hsplit = QSplitter(Qt.Orientation.Horizontal)
         self.hsplit.addWidget(self._sources_panel())
@@ -189,6 +210,8 @@ class MainWindow(QMainWindow):
         body_layout.addWidget(self.vsplit, 1)
         root.addWidget(body, 1)
         root.addWidget(self._status_area())
+        for button in (self.btn_pause, self.btn_finish, self.btn_stop):
+            self.job_panel.add_button(button)
 
     def _header(self) -> QWidget:
         bar = QFrame()
@@ -397,18 +420,25 @@ class MainWindow(QMainWindow):
         self.search.setPlaceholderText("Search names (e.g. *.jpg, invoice) and press Enter")
         self.search.addAction(icons.icon("search", current().muted), QLineEdit.ActionPosition.LeadingPosition)
         self.search.setClearButtonEnabled(True)
-        self.category = QComboBox()
-        self.category.addItems(["All files", *CATEGORIES.keys(), "Other"])
+        self.category = CategoryChips(["All files", *CATEGORIES.keys(), "Other"])
         self.status_filter = QComboBox()
         self.status_filter.addItems(["Existing and deleted", "Existing only", "Deleted and found only"])
-        self.btn_select_all = QPushButton(icons.icon("check"), "Tick all shown")
+        self.btn_select_all = QToolButton()
+        self.btn_select_all.setObjectName("TickButton")
+        self.btn_select_all.setText("Tick all shown")
+        self.btn_select_all.setIcon(icons.icon("check"))
+        self.btn_select_all.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.btn_select_all.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.btn_select_all.setToolTip("Tick every file the filter shows. The arrow has more ways to tick: halves, "
+                                       "what fits on a drive, what isn't recovered yet.")
+        self.btn_select_all.setMenu(self._tick_menu())
         self.btn_select_none = QPushButton("Clear ticks")
         bar.addWidget(self.search, 2)
-        bar.addWidget(self.category)
         bar.addWidget(self.status_filter)
         bar.addWidget(self.btn_select_all)
         bar.addWidget(self.btn_select_none)
         layout.addLayout(bar)
+        layout.addWidget(self.category)
         self.found_label = QLabel()
         self.found_label.setProperty("muted", True)
         layout.addWidget(self.found_label)
@@ -514,6 +544,40 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(disk, icons.icon("grid"), "Disk map")
         return self.tabs
 
+    def _tick_menu(self) -> QMenu:
+        menu = QMenu(self)
+        entries = [
+            ("check", "Tick all shown", self._tick_all_shown, ""),
+            ("", "Untick all", self._tick_none, ""),
+            ("", "Invert ticks of the files shown", self._invert_ticks, ""),
+            (None, "", None, ""),
+            ("", "Tick the first half (by size, in disk order)", self._tick_first_half,
+             "Split a recovery that is too big for one drive: the first half now, the second half on another "
+             "drive. Each half is one stretch of the source drive."),
+            ("", "Tick the second half", self._tick_second_half, ""),
+            ("", "Tick up to a size…", self._tick_up_to, ""),
+            ("open", "Tick what fits on a drive…", self._tick_fits_on_drive,
+             "Pick a folder on the destination drive: Lifeboat ticks, in disk order, the files not recovered yet "
+             "that fit in its free space."),
+            (None, "", None, ""),
+            ("recover", "Tick files not recovered yet", self._tick_not_recovered,
+             "Every file shown that no recovery in this session has recovered (stopped, skipped or failed)."),
+            ("", "Untick files already recovered", self._untick_recovered, ""),
+        ]
+        self.tick_actions: dict[str, QAction] = {}
+        for icon_name, text, slot, tip in entries:
+            if icon_name is None:
+                menu.addSeparator()
+                continue
+            action = menu.addAction(icons.icon(icon_name), text) if icon_name else menu.addAction(text)
+            if tip:
+                action.setToolTip(tip)
+                action.setStatusTip(tip)
+            action.triggered.connect(slot)
+            self.tick_actions[text] = action
+        menu.setToolTipsVisible(True)
+        return menu
+
     def _event_table(self, model: EventModel) -> QTableView:
         view = QTableView()
         view.setModel(model)
@@ -557,8 +621,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.status_detail)
         layout.addWidget(self.problem_badge)
         for b in (self.btn_pause, self.btn_finish, self.btn_stop):
-            b.setVisible(False)
-            layout.addWidget(b)
+            b.setVisible(False)  # they live in the job panel
         return bar
 
     # ================================================================ signals
@@ -598,7 +661,7 @@ class MainWindow(QMainWindow):
         self.preview.preview_requested.connect(self.preview_node)
         self.search.returnPressed.connect(self._apply_filter)
         self.search.textChanged.connect(self._search_edited)
-        self.category.currentIndexChanged.connect(self._filter_changed)
+        self.category.changed.connect(self._category_changed)
         self.status_filter.currentIndexChanged.connect(self._filter_changed)
         self.btn_select_all.clicked.connect(self._tick_all_shown)
         self.btn_select_none.clicked.connect(self._tick_none)
@@ -636,6 +699,9 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(1)
 
     def _filter_changed(self, _index: int) -> None:
+        self._apply_filter()
+
+    def _category_changed(self, _name: str) -> None:
         self._apply_filter()
 
     def _tick_none(self) -> None:
@@ -706,8 +772,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.device = self._open(info)
-            policy = ReadPolicy(timeout=setting_float("read_timeout", 15))
-            self.reader = RescueReader(self.device, policy, events=self.bus)
+            self.reader = RescueReader(self.device, self._read_policy(), events=self.bus)
             self.info = self.device.info if info.kind != "image" else info
             if info.kind == "image":
                 info.size = self.device.size
@@ -723,13 +788,22 @@ class MainWindow(QMainWindow):
             self.open_error = LifeboatError(str(exc))
             self.bus.error(f"Cannot open {info.title}: {exc}")
         self.diskmap.set_map(self.reader.map if self.reader else None)
-        self.legend.update_totals(self.reader.map if self.reader else None)
+        self.legend.update_totals(self.reader.map if self.reader else None, self.diskmap.block_bytes())
         self._show_overview()
         self.pages.setCurrentIndex(1)
         self._update_actions()
         if self.device is not None and info.kind == "disk" and hasattr(self.device, "health"):
             device = self.device
             Job("health", self.bridge, lambda _j: device.health()).start()  # type: ignore[attr-defined]
+
+    @staticmethod
+    def _read_policy(policy: ReadPolicy | None = None) -> ReadPolicy:
+        """The reading limits from Settings (applied to ``policy`` when given)."""
+        policy = policy or ReadPolicy()
+        policy.timeout = pref_float("read_timeout")
+        policy.slow_seconds = pref_float("slow_seconds")
+        policy.wake_seconds = pref_float("wake_seconds")
+        return policy
 
     def _open(self, info: DeviceInfo) -> BlockDevice:
         if info.kind == "image":
@@ -750,6 +824,7 @@ class MainWindow(QMainWindow):
         return open_device(info)
 
     def _close_source(self) -> None:
+        self.category.reset()
         self.selection.set_root(None)
         self.folder_model.set_root(None)
         self.list_model.set_folder(None)
@@ -812,6 +887,14 @@ class MainWindow(QMainWindow):
         self.ov_admin.setVisible(self.open_error is not None and self.open_error.code == "LB-101"
                                  and sys.platform == "win32")
         self.ov_check.setVisible(bool(info.status) or (self.open_error is not None and info.kind == "disk"))
+        for button in (self.ov_scan, self.ov_deep, self.ov_image):
+            button.setVisible(not info.status)  # nothing to scan or image until the drive answers
+        primary = bool(info.status)
+        if self.ov_check.property("primary") != primary:
+            self.ov_check.setProperty("primary", primary)
+            self.ov_check.setIcon(icons.icon("pulse", "#ffffff" if primary else None))
+            self.ov_check.style().unpolish(self.ov_check)
+            self.ov_check.style().polish(self.ov_check)
 
     def _health_ready(self, health: object) -> None:
         t = current()
@@ -890,12 +973,16 @@ class MainWindow(QMainWindow):
         self.job = job
         if self.reader is not None:
             self.reader.control = job.control
+        if kind in LONG_JOBS and bool(pref("keep_awake")):
+            self.power.start(label)
         self.status_text.setText(label)
-        self.progress.setVisible(True)
+        self.progress.setVisible(kind not in LONG_JOBS)  # long jobs get the job panel
         self.progress.setRange(0, 0)
+        if kind in LONG_JOBS:
+            self.job_panel.start(label, JOB_ICONS[kind])
         self.btn_pause.setVisible(kind in ("scan", "deep", "recover", "image"))
         self.btn_pause.setText("Pause")
-        self.btn_stop.setVisible(kind in ("scan", "deep", "recover", "image"))
+        self.btn_stop.setVisible(kind in ("scan", "deep", "recover", "image", "order"))
         self.btn_finish.setVisible(False)
         self._update_actions()
         job.start()
@@ -905,6 +992,8 @@ class MainWindow(QMainWindow):
         if self.reader is not None:
             self.reader.control = None
         self.job = None
+        self.power.stop()
+        self.job_panel.finish()
         self.progress.setVisible(False)
         for b in (self.btn_pause, self.btn_stop, self.btn_finish):
             b.setVisible(False)
@@ -912,9 +1001,10 @@ class MainWindow(QMainWindow):
         self.status_text.setText("Ready")
         self.setWindowTitle(APP_FULL_NAME)
         self._update_actions()
+        self.diskmap.set_head(None)
         if self.reader is not None:
-            self.legend.update_totals(self.reader.map)
             self.diskmap.refresh()
+            self.legend.update_totals(self.reader.map, self.diskmap.block_bytes())
 
     def toggle_pause(self) -> None:
         if self.job is None:
@@ -924,11 +1014,13 @@ class MainWindow(QMainWindow):
             self.btn_pause.setText("Pause")
             self.btn_pause.setIcon(icons.icon("pause"))
             self.status_text.setText(self.status_text.text().replace(" (paused)", ""))
+            self.job_panel.phase.setText(self.job_panel.phase.text().replace(" (paused)", ""))
         else:
             self.job.control.pause()
             self.btn_pause.setText("Resume")
             self.btn_pause.setIcon(icons.icon("play"))
             self.status_text.setText(self.status_text.text() + " (paused)")
+            self.job_panel.phase.setText(self.job_panel.phase.text() + " (paused)")
 
     def stop_job(self) -> None:
         if self.job is None:
@@ -953,7 +1045,7 @@ class MainWindow(QMainWindow):
             return
         reader, info = self.reader, self.info
         self._detach_tree()
-        options = ScanOptions(metadata_retry_seconds=setting_float("metadata_retry", 180))
+        options = ScanOptions(metadata_retry_seconds=pref_float("metadata_retry"))
 
         def work(job: Job) -> ScanResult:
             scanner = Scanner(reader, info, self.bus, job.control, job.report, job.handler, options)
@@ -975,7 +1067,7 @@ class MainWindow(QMainWindow):
         self._detach_tree()
         options = ScanOptions(find_partitions=values["find_partitions"], carve=values["carve"],
                               carve_groups=values["groups"],
-                              metadata_retry_seconds=setting_float("metadata_retry", 180))
+                              metadata_retry_seconds=pref_float("metadata_retry"))
 
         def work(job: Job) -> ScanResult:
             scanner = Scanner(reader, info, self.bus, job.control, job.report, job.handler, options)
@@ -990,12 +1082,15 @@ class MainWindow(QMainWindow):
         self.preview.show_node(None)
 
     def _show_result(self, result: ScanResult) -> None:
+        if result is not self.result:
+            self._positions = {}
+            self.list_model.results.clear()
         self.result = result
         self.selection.set_root(result.root)
         self.folder_model.set_root(result.root)
-        self.list_model.results.clear()
         self.pages.setCurrentIndex(2)
         files, deleted, size = result.counts()
+        self.category.set_counts(self._category_counts(result.root))
         vols = [v for v in result.volumes if v.volume is not None]
         self.found_label.setText(
             f"{files:,} files found ({deleted:,} deleted or found by signature), {format_size(size)} in "
@@ -1006,6 +1101,18 @@ class MainWindow(QMainWindow):
             self.tree.expand(first)
         self._apply_filter()
 
+    @staticmethod
+    def _category_counts(root: Node) -> dict[str, tuple[int, int]]:
+        hidden = 0 if bool(pref("show_system")) else F.SYSTEM | F.STREAM
+        counts: dict[str, list[int]] = {}
+        for node in root.walk():
+            if node.children is not None or node.flags & hidden:
+                continue
+            entry = counts.setdefault(category(node), [0, 0])
+            entry[0] += 1
+            entry[1] += node.size
+        return {name: (c, b) for name, (c, b) in counts.items()}
+
     def recover(self) -> None:
         if self.reader is None or self.info is None or self.result is None:
             self.toasts.show("warning", "Nothing to recover yet", "Scan a source and tick the files you want.")
@@ -1014,14 +1121,24 @@ class MainWindow(QMainWindow):
         if not files:
             self.toasts.show("warning", "No files ticked", "Tick the files or folders you want to recover.")
             return
+        if self._remaining:
+            pool = {id(n) for n in self._remaining}
+            if any(id(n) not in pool for n in files):
+                self._remaining = []  # ticked by hand since the split: no longer part of it
         size = sum(n.size for n in files)
         over = sum(1 for n in files if n.size > FOUR_GB)
         largest = max((n.size for n in files), default=0)
         dialog = RecoverDialog(self, self.info, len(files), size, self.selection.hidden_selected, over, largest)
-        accepted = dialog.exec() == dialog.DialogCode.Accepted
+        code = dialog.exec()
         values = dialog.values()
+        fit_free = getattr(dialog, "fit_free", -1)
         dialog.deleteLater()
-        if not accepted:
+        if code == FIT_RESULT and fit_free > 0:
+            # Tick, in disk order, the ticked files that fit there; then this dialog opens again.
+            self._recover_after_tick = True
+            self._in_disk_order("fit", (ticking.fill_budget(fit_free), values["destination"]), files)
+            return
+        if code != dialog.DialogCode.Accepted:
             return
         options = RecoveryOptions(**values)
         folders = self.selection.selected_folders()
@@ -1075,11 +1192,11 @@ class MainWindow(QMainWindow):
         self.preview.show_busy()
         volume = node.volume
 
-        def work(_job: Job) -> tuple[Node, bytes, bool]:
+        def work(_job: Job) -> tuple[Node, bytes, bool, FileLayout]:
             layout = volume.layout(node)
             chunk = FileContentReader(layout, volume.reader).read(0, length, ReadMode.FAST)
             complete = all(st == OK for _s, _e, st in chunk.states)
-            return node, bytes(chunk.data), complete
+            return node, bytes(chunk.data), complete, layout
 
         self._start("preview", f"Reading {node.name} for preview…", work)
 
@@ -1099,6 +1216,8 @@ class MainWindow(QMainWindow):
         if self.job.control.paused:
             phase += " (paused)"
         self.status_text.setText(f"{phase} — {p.item}" if p.item else phase)
+        if self.job_panel.isVisible():
+            self.job_panel.update_progress(p, self.job.control.paused)
         details = []
         if p.items_total:
             details.append(f"{p.items_done:,}/{p.items_total:,} files")
@@ -1111,8 +1230,10 @@ class MainWindow(QMainWindow):
         if p.bad_bytes:
             details.append(f"{format_size(p.bad_bytes)} unreadable")
         self.status_detail.setText(" · ".join(details))
+        if self.reader is not None and self.job.kind in LONG_JOBS:
+            self.diskmap.set_head(self.reader.stats.last_offset)
         if self.reader is not None and self.tabs.currentIndex() == 3:
-            self.legend.update_totals(self.reader.map)
+            self.legend.update_totals(self.reader.map, self.diskmap.block_bytes())
 
     def _on_finished(self, kind: str, result: object) -> None:
         if kind == "devices":
@@ -1135,7 +1256,17 @@ class MainWindow(QMainWindow):
             self._imaging_done(result)
         elif kind == "preview":
             assert isinstance(result, tuple)
-            self.preview.show_content(result[0], result[1], result[2])
+            node, data, complete, layout = result
+            self.preview.show_layout(node, layout.fragments, layout.problems, layout.unsupported)
+            self.preview.show_content(node, data, complete)
+        elif kind == "order":
+            assert isinstance(result, tuple)
+            positions, stuck = result
+            self._positions.update(positions)
+            if stuck:
+                self.bus.warning("The source drive stopped answering while Lifeboat looked up where the files are. "
+                                 "The files after that point are taken in folder order.")
+            self._finish_tick()
 
     def _on_failed(self, kind: str, message: str, details: str) -> None:
         if kind == "devices":
@@ -1148,6 +1279,9 @@ class MainWindow(QMainWindow):
         if kind == "preview":
             self.preview.show_unavailable(f"Could not read this file: {message}")
             return
+        if kind == "order":
+            self._pending_tick = None
+            self._recover_after_tick = False
         if kind in ("scan", "deep") and self.result is not None:
             self._show_result(self.result)
         self.bus.critical(f"The {kind} stopped because of an unexpected error: {message}", code="LB-500")
@@ -1156,6 +1290,9 @@ class MainWindow(QMainWindow):
 
     def _on_cancelled(self, kind: str) -> None:
         self._job_done()
+        if kind == "order":
+            self._pending_tick = None
+            self._recover_after_tick = False
         if kind in ("scan", "deep"):
             if self.result is not None:
                 self._show_result(self.result)
@@ -1167,7 +1304,12 @@ class MainWindow(QMainWindow):
         self.last_summary = summary
         self.results_model.set_tasks(summary.tasks)
         self.results_label.setText(f"{summary.headline()} — saved in {summary.job_dir}")
-        self.list_model.results = {id(t.node): ResultInfo(t.status, t.message) for t in summary.tasks}
+        # Keep what earlier recoveries in this session achieved: "not recovered yet" spans them all.
+        results = self.list_model.results
+        for task in summary.tasks:
+            old = results.get(id(task.node))
+            if old is None or _RANK.get(task.status, 0) >= _RANK.get(old.status, 0):
+                results[id(task.node)] = ResultInfo(task.status, task.message)
         self.list.setColumnHidden(6, False)
         self.list.viewport().update()
         self.tabs.setCurrentIndex(2)
@@ -1175,13 +1317,26 @@ class MainWindow(QMainWindow):
         title = {"success": "Recovery complete", "warning": "Recovery finished with problems",
                  "failed": "Recovery failed"}[summary.outcome]
         self._notify(level, title, summary.headline())
-        dialog = SummaryDialog(self, summary)
+        if bool(pref("open_when_done")) and summary.job_dir and os.path.isdir(summary.job_dir):
+            from .models import open_in_explorer
+
+            open_in_explorer(summary.job_dir)
+        # What's left: of this recovery, or of the whole set being split across drives.
+        rest = ticking.not_recovered(self._remaining or [t.node for t in summary.tasks], self.list_model.results)
+        if not rest:
+            self._remaining = []
+        dialog = SummaryDialog(self, summary, len(rest), sum(n.size for n in rest))
         dialog.exec()
         show_problems = dialog.show_problems
+        recover_rest = getattr(dialog, "recover_rest", False)
         dialog.deleteLater()
         if show_problems:
             self.results_mode.setCurrentIndex(0)
             self.tabs.setCurrentIndex(2)
+        if recover_rest and rest:
+            self.selection.apply_ticks(tick=rest, only=True)
+            self._remaining = rest
+            QTimer.singleShot(0, self.recover)  # pick another drive for the rest
 
     def _imaging_done(self, summary: ImagingSummary) -> None:
         level = "success" if summary.outcome == "success" else "warning"
@@ -1222,7 +1377,12 @@ class MainWindow(QMainWindow):
             self.problem_badge.setStyleSheet(f"color:{colour}; font-weight:600;")
             self.tabs.setTabText(1, f"Problems ({self._problem_count:,})")
             self.tabs.tabBar().setTabTextColor(1, QColor(colour))
-        if event.level >= Level.WARNING:
+        wanted = False
+        if event.level >= Level.WARNING:  # Settings > Notifications > Pop-ups in the window
+            mode = str(pref("toasts"))
+            wanted = (event.level == Level.CRITICAL or mode == "all"
+                      or (mode == "errors" and event.level >= Level.ERROR))
+        if wanted:
             # One pop-up per problem, unless they arrive in a burst (a dying drive can fail
             # thousands of files): then the rest are counted into one "N more problems" pop-up.
             now = time.monotonic()
@@ -1253,21 +1413,22 @@ class MainWindow(QMainWindow):
 
     def _notify(self, level: str, title: str, message: str) -> None:
         self.toasts.show(level, title, message)
-        if bool(setting("tray", True)) and not self.isActiveWindow() and self.tray.isVisible():
+        if bool(pref("tray")) and not self.isActiveWindow() and self.tray.isVisible():
             icon = {"success": QSystemTrayIcon.MessageIcon.Information,
                     "warning": QSystemTrayIcon.MessageIcon.Warning}.get(level, QSystemTrayIcon.MessageIcon.Critical)
             self.tray.showMessage(f"{APP_NAME}: {title}", message, icon, 15000)
         self._attention("done" if level == "success" else ("warning" if level == "warning" else "error"))
 
     def _attention(self, kind: str) -> None:
-        if bool(setting("sounds", True)):
+        if bool(pref("sounds")):
             beep(kind)
-        QApplication.alert(self, 0)
+        if bool(pref("flash_taskbar")):
+            QApplication.alert(self, 0)
 
     def _on_intervention(self, pending: PendingDecision) -> None:
         self.banner.ask(pending)
         iv = pending.intervention
-        if bool(setting("tray", True)) and self.tray.isVisible():
+        if bool(pref("tray")) and self.tray.isVisible():
             self.tray.showMessage(f"{APP_NAME}: {iv.title}", iv.message, QSystemTrayIcon.MessageIcon.Critical, 30000)
         self._attention("error")
 
@@ -1304,8 +1465,8 @@ class MainWindow(QMainWindow):
             text=self.search.text().strip(),
             category=self.category.currentText(),
             status=["all", "existing", "deleted"][self.status_filter.currentIndex()],
-            show_system=bool(setting("show_system", False)),
-            show_streams=bool(setting("show_system", False)),
+            show_system=bool(pref("show_system")),
+            show_streams=bool(pref("show_system")),
         )
         current_folder = self.list_model.folder
         self.selection.set_filter(flt)
@@ -1427,7 +1588,123 @@ class MainWindow(QMainWindow):
         elif self.selection.root is not None:
             self.selection.select_all(True)
 
+    # ------------------------------------------------------------ tick tools
+    def _shown_files(self) -> list[Node]:
+        """The files the filter (or the search) shows: what the tick tools work on."""
+        if self.list_model.search_mode:
+            return [n for n in self.list_model.rows if n.children is None]
+        return self.selection.shown_files()
+
+    def _invert_ticks(self) -> None:
+        shown = self._shown_files()
+        self.selection.apply_ticks(tick=[n for n in shown if not n.check], untick=[n for n in shown if n.check])
+
+    def _tick_first_half(self) -> None:
+        self._in_disk_order("half", 0, self._shown_files())
+
+    def _tick_second_half(self) -> None:
+        self._in_disk_order("half", 1, self._shown_files())
+
+    def _tick_up_to(self) -> None:
+        files = ticking.not_recovered(self._shown_files(), self.list_model.results)
+        if not files:
+            self.toasts.show("info", "Nothing to tick", "Every file shown has been recovered already.")
+            return
+        gib = float(1 << 30)
+        total = sum(n.size for n in files) / gib
+        value, ok = QInputDialog.getDouble(
+            self, "Tick up to a size",
+            f"Files shown and not recovered yet: {format_size(total * gib)}.\n"
+            "Tick them in disk order up to this total size, in GB:",
+            max(0.01, round(total / 2, 2)), 0.01, max(0.01, round(total + 0.01, 2)), 2)
+        if ok:
+            self._in_disk_order("size", int(value * gib), files)
+
+    def _tick_fits_on_drive(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Choose a folder on the destination drive",
+                                                  str(setting("last_destination", "")))
+        if not folder:
+            return
+        folder = os.path.normpath(folder)
+        free = free_space(folder)
+        if free < 0:
+            self.toasts.show("error", "Can't read the free space", f"Lifeboat couldn't check {folder}.")
+            return
+        files = ticking.not_recovered(self._shown_files(), self.list_model.results)
+        self._in_disk_order("fit", (ticking.fill_budget(free), folder), files)
+
+    def _tick_not_recovered(self) -> None:
+        files = ticking.not_recovered(self._shown_files(), self.list_model.results)
+        self.selection.apply_ticks(tick=files, only=True)
+        self.toasts.show("success" if files else "info", "Ticked the files not recovered yet",
+                         f"{len(files):,} files, {format_size(sum(n.size for n in files))}.")
+
+    def _untick_recovered(self) -> None:
+        shown = self._shown_files()
+        rest = {id(n) for n in ticking.not_recovered(shown, self.list_model.results)}
+        self.selection.apply_ticks(untick=[n for n in shown if id(n) not in rest])
+
+    def _in_disk_order(self, action: str, arg: object, files: list[Node]) -> None:
+        """Run a tick action on ``files`` sorted by position on the drive (looked up first if needed)."""
+        if not files:
+            self._recover_after_tick = False
+            self.toasts.show("info", "Nothing to tick", "No file matches. Check the filter and the search.")
+            return
+        if self.job is not None:
+            self._recover_after_tick = False
+            self.toasts.show("warning", "A job is running", "Wait for it to finish, then try again.")
+            return
+        self._pending_tick = (action, arg, files)
+        missing = [n for n in files if id(n) not in self._positions]
+        if not missing:
+            self._finish_tick()
+            return
+
+        def work(job: Job) -> tuple[dict[int, int], bool]:
+            def report(done: int, total: int) -> None:
+                job.report(Progress("Finding where the files are on the drive", done, total,
+                                    items_done=done, items_total=total))
+
+            return ticking.positions_for(missing, job.control.check, report)
+
+        self._start("order", f"Finding where {len(missing):,} files are on the drive\u2026", work)
+
+    def _finish_tick(self) -> None:
+        pending, self._pending_tick = self._pending_tick, None
+        if pending is None:
+            return
+        action, arg, files = pending
+        ordered = ticking.disk_order(files, self._positions)
+        title = "Ticked"
+        if action == "half":
+            which = cast(int, arg)
+            part = ticking.halves(ordered)[which]
+            title = f"Ticked the {'first' if which == 0 else 'second'} half"
+            detail = f"{len(part):,} of {len(files):,} files."
+        elif action == "size":
+            part = ticking.fill(ordered, cast(int, arg), cost=lambda n: n.size)
+            detail = f"{len(part):,} of {len(files):,} files, in disk order."
+        else:  # "fit"
+            budget, where = cast(tuple[int, str], arg)
+            part = ticking.fill(ordered, budget)
+            title = "Ticked what fits"
+            left = len(files) - len(part)
+            detail = (f"{len(part):,} files fit in the {format_size(budget)} usable on {where}."
+                      + (f" {left:,} files are left for another drive." if left else " All of them fit."))
+        self.selection.apply_ticks(tick=part, only=True)
+        self._remaining = list(files)  # after the recovery, the summary offers what's left of these
+        self.toasts.show("success" if part else "warning", title,
+                         f"{detail} {format_size(sum(n.size for n in part))} ticked." if part else
+                         "Not even the smallest file fits there.")
+        if self._recover_after_tick:
+            self._recover_after_tick = False
+            if part:
+                QTimer.singleShot(0, self.recover)  # back to the Recover dialog, with what fits
+
     def _selection_changed(self) -> None:
+        shown = self.preview.node
+        if shown is not None and shown.children is not None:
+            self.preview.show_node(shown)  # its "ticked" count changed
         sel = self.selection
         if sel.count:
             hidden = f" ({sel.hidden_selected:,} not shown)" if sel.hidden_selected else ""
@@ -1478,14 +1755,31 @@ class MainWindow(QMainWindow):
         accepted = dialog.exec() == dialog.DialogCode.Accepted
         dialog.deleteLater()
         if accepted:
-            from . import theme as theme_module
+            self.apply_settings()
+            self.toasts.show("success", "Settings saved", "They apply right away; the recovery defaults apply "
+                                                          "the next time you press Recover.")
 
-            theme_module.apply(QApplication.instance(), str(setting("theme", "dark")))  # type: ignore[arg-type]
-            icons.clear_cache()
-            if self.reader is not None:
-                self.reader.policy.timeout = setting_float("read_timeout", 15)
+    def apply_settings(self) -> None:
+        apply_appearance(QApplication.instance())
+        icons.clear_cache()
+        self._apply_row_heights()
+        self.diskmap.set_mode(str(pref("map_animation")))
+        self.diskmap.invalidate()
+        if self.reader is not None:
+            self._read_policy(self.reader.policy)
+        if self.job is not None and self.job.kind in LONG_JOBS:
+            if bool(pref("keep_awake")):
+                self.power.start()
+            else:
+                self.power.stop()
+        if self.result is not None:
             self._apply_filter()
-            self.toasts.show("success", "Settings saved", "Some changes apply to the next scan.")
+
+    def _apply_row_heights(self) -> None:
+        """Rows sized for the text size and row spacing chosen in Settings."""
+        height = self.fontMetrics().height() + (6 if str(pref("density")) == "compact" else 12)
+        for view in (self.activity, self.problems, self.results):
+            view.verticalHeader().setDefaultSectionSize(height)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.job is not None and self.job.kind in ("scan", "deep", "recover", "image"):
@@ -1500,6 +1794,7 @@ class MainWindow(QMainWindow):
             self.job.control.cancel()
             self.job.thread.join(timeout=15)
         self.tray.hide()
+        self.power.stop()
         self._close_source()
         event.accept()
 

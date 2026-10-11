@@ -112,8 +112,8 @@ def check_destination(destination: str, source: DeviceInfo, needed: int, largest
     if report.free >= 0 and report.free < needed + margin:
         report.issues.append(PreflightIssue(
             E_DEST_SPACE,
-            f"The destination has {format_size(report.free)} free but the selected files need "
-            f"{format_size(needed)}. Lifeboat will stop and ask you when the drive is full.",
+            f"Not enough space: the ticked files need {format_size(needed)}, the destination has "
+            f"{format_size(report.free)} free.",
             not allow_low_space,
         ))
     # 4. FAT32 cannot store files of 4 GB or more.

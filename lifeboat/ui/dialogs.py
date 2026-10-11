@@ -9,11 +9,9 @@ from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -22,12 +20,11 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from .. import __version__
+from .. import build_info
 from ..branding import APP_FULL_NAME, PUBLISHER, PUBLISHER_URL, TAGLINE, owner_logo
 from ..device.base import DeviceInfo
 from ..errors import E_DEST_SPACE
@@ -38,10 +35,34 @@ from ..recover import PreflightReport, RecoverySummary, Status, check_destinatio
 from ..util import format_duration, format_size
 from . import icons
 from .theme import current
-from .widgets import StatCard
+from .widgets import Donut, StatCard
 
 ORG = "Zays"
 APP = os.environ.get("LIFEBOAT_SETTINGS_NAME", "Lifeboat")  # the test-suite uses its own settings
+
+# Every preference and its default, in one place (Settings > Restore defaults uses these).
+DEFAULTS: dict[str, object] = {
+    "theme": "dark",                # dark / light / system
+    "map_animation": "smooth",      # smooth / light / off
+    "text_size": "normal",          # normal / large
+    "density": "comfortable",       # comfortable / compact
+    "sounds": True,
+    "tray": True,                   # system notifications while Lifeboat is in the background
+    "toasts": "all",                # pop-ups in the window: all / errors / off
+    "flash_taskbar": True,
+    "thoroughness": "standard",
+    "job_folder": True,
+    "verify": True,
+    "preserve_times": True,
+    "mark_damaged": False,
+    "open_when_done": False,
+    "read_timeout": 15,             # seconds before one read is given up
+    "wake_seconds": 30,             # seconds a drive that stops answering gets to come back
+    "slow_seconds": 3.0,            # reads slower than this skip ahead (the area is read last)
+    "metadata_retry": 180,          # seconds spent re-reading damaged file tables during a scan
+    "keep_awake": True,
+    "show_system": False,
+}
 
 
 def settings() -> QSettings:
@@ -82,6 +103,23 @@ def setting(key: str, default: object) -> object:
         except (TypeError, ValueError):
             return default
     return value
+
+
+def pref(key: str) -> object:
+    """A preference, with its default from ``DEFAULTS``."""
+    return setting(key, DEFAULTS[key])
+
+
+def pref_float(key: str) -> float:
+    value = pref(key)
+    return float(value) if isinstance(value, int | float) else float(DEFAULTS[key])  # type: ignore[arg-type]
+
+
+def apply_appearance(app: object) -> None:
+    """Theme, text size and row spacing from the settings."""
+    from . import theme
+
+    theme.apply(app, str(pref("theme")), str(pref("text_size")), str(pref("density")))  # type: ignore[arg-type]
 
 
 def _primary(button: QPushButton) -> QPushButton:
@@ -142,10 +180,16 @@ class _Thoroughness(QWidget):
         return "standard"
 
 
+FIT_RESULT = 2  # RecoverDialog's "Tick only what fits here": untick what doesn't fit, then open it again
+
+
 class RecoverDialog(QDialog):
+    FIT = FIT_RESULT
+
     def __init__(self, parent: QWidget, source: DeviceInfo, count: int, size: int, hidden: int,
                  files_over_4g: int, largest: int) -> None:
         super().__init__(parent)
+        self.fit_free = -1
         self.setWindowTitle("Recover files")
         self.setMinimumWidth(640)
         self.source = source
@@ -190,10 +234,20 @@ class RecoverDialog(QDialog):
         self.resume.setVisible(False)
         self.resume.toggled.connect(self._validate)
         dest_layout.addWidget(self.resume)
-        self.low_space = QCheckBox("Recover as much as fits (Lifeboat will ask when the drive is full)")
-        self.low_space.setVisible(False)
+        self.space_row = QWidget()
+        space = QHBoxLayout(self.space_row)
+        space.setContentsMargins(0, 4, 0, 0)
+        self.fit_button = QPushButton(icons.icon("check"), "Tick only what fits here")
+        self.fit_button.setToolTip("Keep ticked, in disk order, only the files that fit on this drive, then come "
+                                   "back here. When the recovery is done, recover the rest to another drive "
+                                   "from the summary.")
+        self.fit_button.clicked.connect(self._fit)
+        self.low_space = QCheckBox("Or start anyway: Lifeboat stops and asks when the drive is full")
         self.low_space.toggled.connect(self._update_buttons)
-        dest_layout.addWidget(self.low_space)
+        space.addWidget(self.fit_button)
+        space.addWidget(self.low_space, 1)
+        self.space_row.setVisible(False)
+        dest_layout.addWidget(self.space_row)
         layout.addWidget(dest_box)
         opts = QFrame()
         opts.setObjectName("Card")
@@ -202,16 +256,16 @@ class RecoverDialog(QDialog):
         title = QLabel("How hard to try")
         title.setObjectName("SectionTitle")
         opts_layout.addWidget(title)
-        self.thoroughness = _Thoroughness(str(setting("thoroughness", "standard")))
+        self.thoroughness = _Thoroughness(str(pref("thoroughness")))
         opts_layout.addWidget(self.thoroughness)
         self.job_folder = QCheckBox("Put the files in a new dated folder (keeps each recovery separate)")
-        self.job_folder.setChecked(bool(setting("job_folder", True)))
+        self.job_folder.setChecked(bool(pref("job_folder")))
         self.verify = QCheckBox("Verify every file after copying (recommended)")
-        self.verify.setChecked(bool(setting("verify", True)))
+        self.verify.setChecked(bool(pref("verify")))
         self.times = QCheckBox("Keep original dates and times")
-        self.times.setChecked(bool(setting("preserve_times", True)))
+        self.times.setChecked(bool(pref("preserve_times")))
         self.mark = QCheckBox('Add "[DAMAGED]" to the names of partly recovered files')
-        self.mark.setChecked(bool(setting("mark_damaged", False)))
+        self.mark.setChecked(bool(pref("mark_damaged")))
         for box in (self.job_folder, self.verify, self.times, self.mark):
             opts_layout.addWidget(box)
         layout.addWidget(opts)
@@ -273,10 +327,11 @@ class RecoverDialog(QDialog):
             if issue.code == E_DEST_SPACE:
                 kind = "error"
             self.checks.addWidget(_issue_row(kind, f"{issue.message}  [{issue.code}]"))
-        if report.ok and report.free >= 0:
+        if report.ok and report.free >= 0 and not report.space_short:
             fs = f" ({report.filesystem})" if report.filesystem else ""
             self.checks.addWidget(_issue_row("ok", f"{format_size(report.free)} free on the destination{fs}."))
-        self.low_space.setVisible(report.space_short)
+        self.space_row.setVisible(report.space_short)
+        self.fit_button.setEnabled(report.space_short and report.free > 0)
         self._update_buttons()
 
     def _update_buttons(self) -> None:
@@ -285,6 +340,13 @@ class RecoverDialog(QDialog):
         if report is not None and report.space_short and not self.low_space.isChecked():
             ok = False
         self.start.setEnabled(bool(ok))
+
+    def _fit(self) -> None:
+        if self.report is None or self.report.free <= 0:
+            return
+        self.fit_free = self.report.free
+        settings().setValue("last_destination", self.dest.text().strip())
+        self.done(self.FIT)
 
     def _accept(self) -> None:
         s = settings()
@@ -471,59 +533,6 @@ class DeepScanDialog(QDialog):
                 "carve": self.carve.isChecked() and bool(groups), "groups": groups}
 
 
-class SettingsDialog(QDialog):
-    def __init__(self, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Settings")
-        self.setMinimumWidth(520)
-        layout = QVBoxLayout(self)
-        form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self.theme = QComboBox()
-        self.theme.addItems(["Dark", "Light", "Match Windows"])
-        self.theme.setCurrentIndex({"dark": 0, "light": 1, "system": 2}.get(str(setting("theme", "dark")), 0))
-        form.addRow("Appearance", self.theme)
-        self.timeout = QSpinBox()
-        self.timeout.setRange(3, 120)
-        self.timeout.setSuffix(" s")
-        self.timeout.setValue(setting_int("read_timeout", 15))
-        self.timeout.setToolTip("How long to wait for one read before treating it as failed and moving on.")
-        form.addRow("Give up on a read after", self.timeout)
-        self.meta = QSpinBox()
-        self.meta.setRange(0, 3600)
-        self.meta.setSuffix(" s")
-        self.meta.setValue(setting_int("metadata_retry", 180))
-        self.meta.setToolTip("Time spent re-reading unreadable parts of a file table during a scan.")
-        form.addRow("Retry damaged file tables for", self.meta)
-        self.system_files = QCheckBox("Show NTFS system files ($MFT, \u2026) and alternate data streams")
-        self.system_files.setChecked(bool(setting("show_system", False)))
-        form.addRow("", self.system_files)
-        self.sounds = QCheckBox("Play a sound when a job finishes or needs attention")
-        self.sounds.setChecked(bool(setting("sounds", True)))
-        form.addRow("", self.sounds)
-        self.tray = QCheckBox("Show Windows notifications when Lifeboat is in the background")
-        self.tray.setChecked(bool(setting("tray", True)))
-        form.addRow("", self.tray)
-        layout.addLayout(form)
-        logs = QPushButton(icons.icon("open"), "Open log folder")
-        logs.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(log_dir())))
-        layout.addWidget(logs, 0, Qt.AlignmentFlag.AlignLeft)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-    def _save(self) -> None:
-        s = settings()
-        s.setValue("theme", ["dark", "light", "system"][self.theme.currentIndex()])
-        s.setValue("read_timeout", self.timeout.value())
-        s.setValue("metadata_retry", self.meta.value())
-        s.setValue("show_system", self.system_files.isChecked())
-        s.setValue("sounds", self.sounds.isChecked())
-        s.setValue("tray", self.tray.isChecked())
-        self.accept()
-
-
 class AboutDialog(QDialog):
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
@@ -538,7 +547,8 @@ class AboutDialog(QDialog):
         texts = QVBoxLayout()
         name = QLabel(APP_FULL_NAME)
         name.setObjectName("BigTitle")
-        version = QLabel(f"Version {__version__}")
+        version = QLabel(f"Version {build_info()}")
+        version.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         version.setProperty("muted", True)
         tag = QLabel(TAGLINE)
         texts.addWidget(name)
@@ -573,12 +583,13 @@ class AboutDialog(QDialog):
 
 
 class SummaryDialog(QDialog):
-    def __init__(self, parent: QWidget, summary: RecoverySummary) -> None:
+    def __init__(self, parent: QWidget, summary: RecoverySummary, rest_count: int = 0, rest_size: int = 0) -> None:
         super().__init__(parent)
         self.summary = summary
         self.show_problems = False
+        self.recover_rest = False
         self.setWindowTitle("Recovery finished")
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(720)
         t = current()
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -597,11 +608,19 @@ class SummaryDialog(QDialog):
         head_text = QVBoxLayout()
         big = QLabel(title)
         big.setObjectName("BigTitle")
+        big.setWordWrap(True)
         sub = QLabel(summary.headline())
         sub.setProperty("muted", True)
+        sub.setWordWrap(True)
         head_text.addWidget(big)
         head_text.addWidget(sub)
         head.addLayout(head_text, 1)
+        done = summary.count(Status.OK)
+        total = len(summary.tasks)
+        head.addWidget(Donut([(done, t.ok), (summary.count(Status.PARTIAL), t.warn),
+                              (summary.count(Status.FAILED), t.bad),
+                              (summary.count(Status.SKIPPED) + summary.count(Status.PENDING), t.border)],
+                             f"{done * 100 // total if total else 0}%", "recovered"))
         layout.addLayout(head)
         grid = QGridLayout()
         grid.setSpacing(10)
@@ -628,6 +647,22 @@ class SummaryDialog(QDialog):
         where.setWordWrap(True)
         where.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(where)
+        if rest_count:
+            # The rest of a split recovery, or what this one didn't get to: one click to carry on.
+            card = QFrame()
+            card.setObjectName("Card")
+            row = QHBoxLayout(card)
+            row.setContentsMargins(14, 10, 10, 10)
+            text = QLabel(f"<b>{rest_count:,} files not recovered yet</b> ({format_size(rest_size)}): not ticked "
+                          "because they didn't fit, or stopped, skipped or failed. Recover them now, for example "
+                          "to another drive.")
+            text.setWordWrap(True)
+            more = _primary(QPushButton(icons.icon("recover", "#ffffff"), "Recover the rest\u2026"))
+            more.setToolTip("Ticks exactly those files and opens the Recover window")
+            more.clicked.connect(self._recover_rest)
+            row.addWidget(text, 1)
+            row.addWidget(more)
+            layout.addWidget(card)
         buttons = QHBoxLayout()
         open_folder = QPushButton(icons.icon("open"), "Open folder")
         open_folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(summary.job_dir)))
@@ -637,7 +672,7 @@ class SummaryDialog(QDialog):
         problems = QPushButton(icons.icon("warning"), "Show problems")
         problems.setEnabled(outcome != "success")
         problems.clicked.connect(self._problems)
-        close = _primary(QPushButton("Close"))
+        close = QPushButton("Close") if rest_count else _primary(QPushButton("Close"))
         close.clicked.connect(self.accept)
         for b in (open_folder, report, problems):
             buttons.addWidget(b)
@@ -647,6 +682,10 @@ class SummaryDialog(QDialog):
 
     def _problems(self) -> None:
         self.show_problems = True
+        self.accept()
+
+    def _recover_rest(self) -> None:
+        self.recover_rest = True
         self.accept()
 
 

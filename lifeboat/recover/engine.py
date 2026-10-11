@@ -759,8 +759,9 @@ class RecoveryJob:
             choice = self.interventions.request(Intervention(
                 code=E_DEST_FULL,
                 title="Destination drive is full",
-                message=("Free up space on the destination (or connect a bigger drive to the same folder), "
-                         "then press Retry. Skip leaves this file out; Stop ends the recovery."),
+                message=("Free up space on the destination, then press Retry. Skip leaves this file out. Stop "
+                         "ends this recovery: its summary then offers to recover the other files to another "
+                         "drive."),
                 options=(Choice.RETRY, Choice.SKIP, Choice.ABORT),
             ))
             if choice is Choice.RETRY:

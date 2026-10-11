@@ -9,7 +9,7 @@ import os
 import time
 from typing import TYPE_CHECKING
 
-from .. import __version__
+from .. import build_info
 from ..branding import APP_FULL_NAME, PUBLISHER
 from ..errors import describe
 from ..util import format_duration, format_size
@@ -157,7 +157,7 @@ dt {{ color:var(--muted); }} dd {{ margin:0; word-break:break-all; }}
 <circle cx="32" cy="32" r="19" fill="none" stroke="#fff" stroke-width="9"/>
 <circle cx="32" cy="32" r="19" fill="none" stroke="#ff6a1a" stroke-width="9" stroke-dasharray="14.9 14.9"
  transform="rotate(-22 32 32)"/></svg>
-<div><h1>Recovery report</h1><p>{esc(APP_FULL_NAME)} {esc(__version__)} by {esc(PUBLISHER)} &middot; {esc(stamp)}</p></div>
+<div><h1>Recovery report</h1><p>{esc(APP_FULL_NAME)} {esc(build_info())} by {esc(PUBLISHER)} &middot; {esc(stamp)}</p></div>
 </header>
 <div class="banner {banner[0]}">{esc(banner[1])}</div>
 <div class="cards">

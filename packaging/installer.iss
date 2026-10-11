@@ -1,8 +1,13 @@
 ; Inno Setup script for Lifeboat Data Recovery.
-; Build after PyInstaller:  ISCC /DAppVersion=1.0.0 packaging\installer.iss
+; Build after PyInstaller:  ISCC /DAppVersion=1.1.0 /DAppBuild=19 packaging\installer.iss
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.1.0"
+#endif
+#ifdef AppBuild
+  #define FileTag AppVersion + "-build" + AppBuild
+#else
+  #define FileTag AppVersion
 #endif
 #define AppName "Lifeboat Data Recovery"
 #define AppPublisher "Zays"
@@ -13,7 +18,7 @@
 AppId={{6E5B1A2C-4F0D-4C55-9A0E-8C7D2B1F4E10}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppVerName={#AppName} {#AppVersion}
+AppVerName={#AppName} {#FileTag}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
@@ -21,7 +26,7 @@ DefaultDirName={autopf}\Lifeboat
 DefaultGroupName=Lifeboat
 DisableProgramGroupPage=yes
 OutputDir=..\dist
-OutputBaseFilename=Lifeboat-Setup-{#AppVersion}
+OutputBaseFilename=Lifeboat-Setup-{#FileTag}
 SetupIconFile=..\lifeboat\assets\lifeboat.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}

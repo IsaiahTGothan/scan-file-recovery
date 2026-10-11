@@ -66,6 +66,7 @@ jobs:
         run: python tests/windows/vhd_e2e.py verify-api
       - name: Build Lifeboat.exe and lifeboat-cli.exe
         run: |
+          python packaging/stamp_build.py
           python packaging/make_icon.py
           pyinstaller packaging/lifeboat.spec --noconfirm --distpath dist --workpath build/pyi
       - name: Smoke test the packaged desktop app
@@ -88,9 +89,9 @@ jobs:
           $version = python -c "import lifeboat; print(lifeboat.__version__)"
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y | Out-Null }
-          & $iscc "/DAppVersion=$version" packaging\installer.iss
+          & $iscc "/DAppVersion=$version" "/DAppBuild=$env:GITHUB_RUN_NUMBER" packaging\installer.iss
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          Compress-Archive -Path dist\Lifeboat -DestinationPath "dist\Lifeboat-$version-portable.zip"
+          Compress-Archive -Path dist\Lifeboat -DestinationPath "dist\Lifeboat-$version-build$env:GITHUB_RUN_NUMBER-portable.zip"
           Get-ChildItem dist | Format-Table Name, Length
       - uses: actions/upload-artifact@v4
         with:

@@ -147,7 +147,7 @@ class DriveCheckDialog(QDialog):
         self.table.verticalHeader().setDefaultSectionSize(30)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for column, width in ((1, 110), (2, 90), (3, 150), (4, 130), (5, 250)):
+        for column, width in ((1, 110), (2, 110), (3, 150), (4, 130), (5, 250)):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
             header.resizeSection(column, width)
         self.table.currentCellChanged.connect(self._row_changed)

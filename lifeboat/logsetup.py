@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__
+from . import build_info
 
 _FAULT_FILE = None
 
@@ -54,7 +54,7 @@ def setup_logging(verbose: bool = False) -> str:
         console.setLevel(logging.DEBUG if verbose else logging.WARNING)
         console._lifeboat = True  # type: ignore[attr-defined]
         root.addHandler(console)
-    logging.getLogger("lifeboat").info("Lifeboat %s starting (Python %s, %s)", __version__,
+    logging.getLogger("lifeboat").info("Lifeboat %s starting (Python %s, %s)", build_info(),
                                        sys.version.split()[0], sys.platform)
     try:
         _FAULT_FILE = open(folder / "crash.log", "a", encoding="utf-8")  # noqa: SIM115

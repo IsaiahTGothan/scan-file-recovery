@@ -2,34 +2,43 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QModelIndex, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
+import math
+import time
+from collections import deque
+from collections.abc import Iterable
+
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
 
 from ..device.base import NO_MEDIA, NOT_ANSWERING, DeviceInfo
-from ..events import Choice, Event, Level
+from ..events import Choice, Event, Level, Progress
 from ..fs.model import F, Node
 from ..rescue.sectormap import PARTIAL, SectorMap, State
-from ..util import format_size, format_timestamp
+from ..util import format_duration, format_rate, format_size, format_timestamp
 from . import icons
 from .bridge import PendingDecision
-from .models import category, chance, status_text
+from .models import category, category_icon, chance, status_text
 from .theme import current
 
 ROLE_INFO = Qt.ItemDataRole.UserRole + 1
@@ -190,28 +199,77 @@ class SourceList(QListWidget):
 
 
 # --------------------------------------------------------------------- disk map
+def _blend(a: QColor, b: QColor, k: float) -> QColor:
+    k = max(0.0, min(1.0, k))
+    return QColor(int(a.red() + (b.red() - a.red()) * k), int(a.green() + (b.green() - a.green()) * k),
+                  int(a.blue() + (b.blue() - a.blue()) * k))
+
+
 class DiskMap(QWidget):
-    """Grid of cells, one per slice of the drive, coloured by read state."""
+    """Grid of blocks, one per slice of the drive, coloured by read state.
+
+    Animation (Settings > Appearance): a block that changes flashes and fades to its new colour,
+    and the block being read glows. Frames are drawn only while the map is on screen and
+    something moves (30 a second, or 8 in "light" mode); the blocks themselves are drawn once
+    into an image when the map changes (at most once a second), so even a job of many hours
+    costs next to nothing. With animation off the map is redrawn once a second when it changes.
+    """
 
     CELL = 9
     GAP = 2
+    FADE = 0.7            # seconds for a changed block to settle on its new colour
+    MAX_FADES = 800       # more blocks changing at once (a small image read in a second) just switch
+    FPS = {"smooth": 30, "light": 8}
 
     def __init__(self) -> None:
         super().__init__()
         self.map: SectorMap | None = None
-        self.position: int | None = None
+        self.mode = "smooth"
+        self.head: int | None = None              # where the drive is being read, while a job runs
+        self.frames_drawn = 0
         self._cells: list[int] = []
+        self._fades: dict[int, tuple[float, int]] = {}  # block -> (when it changed, previous state)
+        self._base: QPixmap | None = None         # every block in its current colour
+        self._version = -1
+        self._hover = -1
         self.setMinimumHeight(120)
+        self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self._timer = QTimer(self)
+        self._timer = QTimer(self)                # the map's data: once a second
         self._timer.timeout.connect(self.refresh)
         self._timer.start(1000)
-        self._version = -1
+        self._frames = QTimer(self)               # animation: only while something moves
+        self._frames.timeout.connect(self._frame)
+
+    # ------------------------------------------------------------------ state
+    def set_mode(self, mode: str) -> None:
+        self.mode = mode if mode in ("smooth", "light", "off") else "smooth"
+        self._fades.clear()
+        self._frames.stop()
+        self._kick()
+        self.update()
 
     def set_map(self, sector_map: SectorMap | None) -> None:
         self.map = sector_map
+        self.head = None
         self._version = -1
+        self._cells = []
+        self._fades.clear()
+        self._base = None
         self.refresh()
+        self.update()
+
+    def set_head(self, offset: int | None) -> None:
+        if offset == self.head:
+            return
+        self.head = offset
+        self._kick()
+        if self.mode == "off":
+            self.update()
+
+    @property
+    def animating(self) -> bool:
+        return self._frames.isActive()
 
     def _grid(self) -> tuple[int, int]:
         step = self.CELL + self.GAP
@@ -219,41 +277,192 @@ class DiskMap(QWidget):
         rows = max(1, (self.height() - 8) // step)
         return cols, rows
 
+    def block_bytes(self) -> int:
+        """How much of the drive one block stands for."""
+        if self.map is None or not self._cells:
+            return 0
+        return self.map.size // len(self._cells)
+
     def refresh(self) -> None:
         if not self.isVisible() or self.map is None:
             return
-        if self.map.version == self._version and len(self._cells) == self._grid()[0] * self._grid()[1]:
+        cols, rows = self._grid()
+        count = cols * rows
+        if self.map.version == self._version and len(self._cells) == count:
             return
         self._version = self.map.version
-        cols, rows = self._grid()
-        self._cells = self.map.summarize(cols * rows)
+        cells = self.map.summarize(count)
+        if len(cells) == len(self._cells) and self._base is not None:
+            changed = [i for i, (old, new) in enumerate(zip(self._cells, cells, strict=True)) if old != new]
+            if self.mode != "off" and len(changed) <= self.MAX_FADES:
+                now = time.monotonic()
+                for index in changed:
+                    self._fades[index] = (now, self._cells[index])
+            self._cells = cells
+            self._paint_cells(self._base, changed)  # only what changed: cheap even once a second
+        else:
+            self._fades.clear()
+            self._cells = cells
+            self._base = None
         self.update()
+        self._kick()
+
+    def invalidate(self) -> None:
+        """Redraw everything (after a theme change)."""
+        self._base = None
+        self.update()
+
+    def _kick(self) -> None:
+        """Run the animation timer while something moves and the map can be seen."""
+        if self.mode == "off" or self._frames.isActive() or not self.isVisible():
+            return
+        if self.window().isMinimized() or (not self._fades and self.head is None):
+            return
+        self._frames.start(1000 // self.FPS[self.mode])
+
+    def _frame(self) -> None:
+        if self.mode == "off" or not self.isVisible() or self.window().isMinimized():
+            self._frames.stop()
+            return
+        now = time.monotonic()
+        self._fades = {i: f for i, f in self._fades.items() if now - f[0] < self.FADE}
+        if not self._fades and self.head is None:
+            self._frames.stop()
+        self.update()
+
+    # ------------------------------------------------------------------ events
+    def showEvent(self, event: QEvent) -> None:
+        super().showEvent(event)  # type: ignore[arg-type]
+        self._version = -1
+        self.refresh()
+        self._kick()
+
+    def hideEvent(self, event: QEvent) -> None:
+        self._frames.stop()
+        super().hideEvent(event)  # type: ignore[arg-type]
 
     def resizeEvent(self, event: QEvent) -> None:
         self._version = -1
+        self._fades.clear()
         self.refresh()
         super().resizeEvent(event)  # type: ignore[arg-type]
 
-    def paintEvent(self, _event: QEvent) -> None:
-        t = current()
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(t.panel))
-        if self.map is None or not self._cells:
-            painter.setPen(QColor(t.muted))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                             "The disk map shows which parts of the drive were read, skipped or found bad.")
+    def _index_at(self, pos: QPoint) -> int:
+        cols, _rows = self._grid()
+        step = self.CELL + self.GAP
+        col, row = (pos.x() - 4) // step, (pos.y() - 4) // step
+        if pos.x() < 4 or pos.y() < 4 or col >= cols:
+            return -1
+        index = row * cols + col
+        return index if 0 <= index < len(self._cells) else -1
+
+    def describe(self, index: int) -> str:
+        """What one block stands for and how much of it was read."""
+        if self.map is None or not 0 <= index < len(self._cells):
+            return ""
+        cell = self.map.size / len(self._cells)
+        start, end = int(index * cell), int((index + 1) * cell)
+        totals: dict[State, int] = {}
+        for seg_start, seg_end, state in self.map.segments(start, end):
+            totals[state] = totals.get(state, 0) + seg_end - seg_start
+        span = max(1, end - start)
+        names = ((State.GOOD, "Read OK"), (State.SKIPPED, "Skipped, retried later"), (State.FAILED, "Failed"),
+                 (State.BAD, "Bad sectors"), (State.UNTRIED, "Not read yet"))
+        lines = [f"Block {index + 1:,} of {len(self._cells):,}: {format_size(start)} to {format_size(end)}"]
+        for state, label in names:
+            amount = totals.get(state, 0)
+            if amount:
+                share = amount * 100 / span
+                lines.append(f"{label}: {format_size(amount)} ({share:.0f}%)" if share >= 1
+                             else f"{label}: {format_size(amount)} (<1%)")
+        return "\n".join(lines)
+
+    def mouseMoveEvent(self, event: QEvent) -> None:
+        index = self._index_at(event.position().toPoint())  # type: ignore[attr-defined]
+        if index == self._hover:
             return
-        colours = {
+        self._hover = index
+        if index < 0:
+            QToolTip.hideText()
+        else:
+            QToolTip.showText(event.globalPosition().toPoint(), self.describe(index), self)  # type: ignore[attr-defined]
+
+    def leaveEvent(self, event: QEvent) -> None:
+        self._hover = -1
+        super().leaveEvent(event)  # type: ignore[arg-type]
+
+    # ------------------------------------------------------------------ painting
+    def _colours(self) -> dict[int, QColor]:
+        t = current()
+        return {
             int(State.UNTRIED): QColor(t.map_untried), int(State.GOOD): QColor(t.map_good),
             PARTIAL: QColor(t.map_partial), int(State.SKIPPED): QColor(t.map_skipped),
             int(State.FAILED): QColor(t.map_failed), int(State.BAD): QColor(t.map_bad),
         }
-        cols, _rows = self._grid()
+
+    def _cell_rect(self, index: int, cols: int) -> QRect:
         step = self.CELL + self.GAP
-        for index, value in enumerate(self._cells):
-            x = 4 + (index % cols) * step
-            y = 4 + (index // cols) * step
-            painter.fillRect(x, y, self.CELL, self.CELL, colours.get(value, colours[0]))
+        return QRect(4 + (index % cols) * step, 4 + (index // cols) * step, self.CELL, self.CELL)
+
+    def _render_base(self) -> QPixmap:
+        ratio = self.devicePixelRatioF()
+        pixmap = QPixmap(int(self.width() * ratio), int(self.height() * ratio))
+        pixmap.setDevicePixelRatio(ratio)
+        pixmap.fill(QColor(current().panel))
+        self._paint_cells(pixmap, range(len(self._cells)))
+        return pixmap
+
+    def _paint_cells(self, pixmap: QPixmap, indexes: Iterable[int]) -> None:
+        colours = self._colours()
+        untried = colours[int(State.UNTRIED)]
+        cols, _rows = self._grid()
+        painter = QPainter(pixmap)
+        for index in indexes:
+            painter.fillRect(self._cell_rect(index, cols), colours.get(self._cells[index], untried))
+        painter.end()
+
+    def paintEvent(self, _event: QEvent) -> None:
+        t = current()
+        painter = QPainter(self)
+        if self.map is None or not self._cells:
+            painter.fillRect(self.rect(), QColor(t.panel))
+            painter.setPen(QColor(t.muted))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                             "The disk map shows which parts of the drive were read, skipped or found bad.")
+            return
+        colours = self._colours()
+        cols, _rows = self._grid()
+        if self._base is None or self._base.deviceIndependentSize().toSize() != self.size():
+            self._base = self._render_base()
+        painter.drawPixmap(0, 0, self._base)
+        now = time.monotonic()
+        untried = colours[int(State.UNTRIED)]
+        white = QColor("#ffffff")
+        for index, (began, previous) in self._fades.items():
+            if index >= len(self._cells):
+                continue
+            k = (now - began) / self.FADE
+            if k >= 1:
+                continue
+            target = colours.get(self._cells[index], untried)
+            bright = _blend(target, white, 0.55)
+            # Old colour -> a bright flash of the new one -> the new colour.
+            colour = (_blend(colours.get(previous, untried), bright, k / 0.25) if k < 0.25
+                      else _blend(bright, target, (k - 0.25) / 0.75))
+            painter.fillRect(self._cell_rect(index, cols), colour)
+        if self.head is not None and self.map.size > 0:
+            index = min(len(self._cells) - 1, max(0, self.head * len(self._cells) // self.map.size))
+            rect = self._cell_rect(index, cols)
+            accent = QColor(t.accent)
+            pulse = 1.0 if self.mode == "off" else 0.5 + 0.5 * math.sin(now * 2 * math.pi / 1.1)
+            glow = QColor(accent)
+            glow.setAlphaF(0.25 + 0.55 * pulse)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(QPen(glow, 2.0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(QRectF(rect).adjusted(-2.5, -2.5, 2.5, 2.5), 3, 3)
+            painter.fillRect(rect, _blend(accent, white, 0.25 * pulse))
+        self.frames_drawn += 1
 
 
 class MapLegend(QWidget):
@@ -284,14 +493,17 @@ class MapLegend(QWidget):
         self.totals.setProperty("muted", True)
         layout.addWidget(self.totals)
 
-    def update_totals(self, sector_map: SectorMap | None) -> None:
+    def update_totals(self, sector_map: SectorMap | None, block: int = 0) -> None:
         if sector_map is None:
             self.totals.setText("")
             return
         totals = sector_map.totals()
-        self.totals.setText(
-            f"OK {format_size(totals[State.GOOD])} · bad {format_size(totals[State.BAD])} · "
-            f"failed {format_size(totals[State.FAILED])} · skipped {format_size(totals[State.SKIPPED])}")
+        text = (f"OK {format_size(totals[State.GOOD])} · bad {format_size(totals[State.BAD])} · "
+                f"failed {format_size(totals[State.FAILED])} · skipped {format_size(totals[State.SKIPPED])}")
+        if block:
+            text += f"   ·   1 block = {format_size(block)}"
+        self.totals.setText(text)
+        self.totals.setToolTip("Point at a block in the map to see what it holds.")
 
 
 # --------------------------------------------------------------- notifications
@@ -533,6 +745,7 @@ class PreviewPane(QFrame):
 
     def show_node(self, node: Node | None) -> None:
         self.node = node
+        self._rows: list[tuple[str, str]] = []
         if node is None:
             self.title.setText("No file selected")
             self.facts.setText("<span>Select a file to see its details.</span>")
@@ -540,7 +753,6 @@ class PreviewPane(QFrame):
             self.message.setText("")
             self.button.setEnabled(False)
             return
-        t = current()
         self.title.setText(node.name or "(root)")
         rows = []
         if node.children is None:
@@ -555,23 +767,31 @@ class PreviewPane(QFrame):
             rows.append(("Modified", format_timestamp(node.mtime)))
         if node.ctime:
             rows.append(("Created", format_timestamp(node.ctime)))
-        if node.volume is not None and node.children is None:
-            try:
-                layout = node.volume.layout(node)
-                if layout.fragments:
-                    rows.append(("Fragments", f"{layout.fragments:,}"))
-                if layout.problems:
-                    rows.append(("Notes", "<br>".join(layout.problems)))
-                if layout.unsupported:
-                    rows.append(("Cannot recover", layout.unsupported))
-            except Exception:  # noqa: BLE001 - details are best effort
-                pass
-        html_rows = "".join(
-            f"<tr><td style='color:{t.muted};padding-right:10px'>{k}</td><td>{v}</td></tr>" for k, v in rows)
-        self.facts.setText(f"<table>{html_rows}</table><div style='color:{t.muted}'>{node.path()}</div>")
+        # Where the file lies on the drive (fragments, problems) is shown after Preview: finding it
+        # can mean reading the drive, which never happens on the window's own thread.
+        self._rows = rows
+        self._show_rows(node)
         self.stack.setCurrentWidget(self.message)
         self.message.setText("Press Preview to look inside the file." if node.children is None else "")
         self.button.setEnabled(node.children is None and node.size > 0)
+
+    def _show_rows(self, node: Node) -> None:
+        t = current()
+        html_rows = "".join(
+            f"<tr><td style='color:{t.muted};padding-right:10px'>{k}</td><td>{v}</td></tr>" for k, v in self._rows)
+        self.facts.setText(f"<table>{html_rows}</table><div style='color:{t.muted}'>{node.path()}</div>")
+
+    def show_layout(self, node: Node, fragments: int, problems: list[str], unsupported: str | None) -> None:
+        """Details found while reading the file for the preview."""
+        if node is not self.node:
+            return
+        if fragments:
+            self._rows.append(("Fragments", f"{fragments:,}"))
+        if problems:
+            self._rows.append(("Notes", "<br>".join(problems)))
+        if unsupported:
+            self._rows.append(("Cannot recover", unsupported))
+        self._show_rows(node)
 
     def show_busy(self) -> None:
         self.stack.setCurrentWidget(self.message)
@@ -627,6 +847,278 @@ class StatCard(QFrame):
     def set(self, value: str, colour: str | None = None) -> None:
         self.value.setText(value)
         self.value.setStyleSheet(f"color: {colour};" if colour else "")
+
+
+class Sparkline(QWidget):
+    """The last minutes of a value (the reading speed), as a small area chart."""
+
+    def __init__(self, samples: int = 120) -> None:
+        super().__init__()
+        self.values: deque[float] = deque(maxlen=samples)
+        self.setFixedHeight(26)
+        self.setMinimumWidth(120)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def add(self, value: float) -> None:
+        self.values.append(max(0.0, float(value)))
+        self.update()
+
+    def clear(self) -> None:
+        self.values.clear()
+        self.update()
+
+    def paintEvent(self, _event: QEvent) -> None:
+        if len(self.values) < 2:
+            return
+        t = current()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        top = max(self.values) or 1.0
+        width, height = self.width() - 2, self.height() - 3
+        step = width / (len(self.values) - 1)
+        start = 0.0
+        line = QPainterPath()
+        for index, value in enumerate(self.values):
+            point = QPointF(1 + start + index * step, 1 + height - value / top * height)
+            if index:
+                line.lineTo(point)
+            else:
+                line.moveTo(point)
+        area = QPainterPath(line)
+        area.lineTo(QPointF(1 + width, 1 + height))
+        area.lineTo(QPointF(1 + start, 1 + height))
+        area.closeSubpath()
+        fill = QColor(t.accent)
+        fill.setAlphaF(0.18)
+        painter.fillPath(area, fill)
+        painter.setPen(QPen(QColor(t.accent), 1.6))
+        painter.drawPath(line)
+
+
+class _Metric(QWidget):
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.value = QLabel("-")
+        self.value.setObjectName("MetricValue")
+        self.label = QLabel(label)
+        self.label.setObjectName("MetricLabel")
+        layout.addWidget(self.value)
+        layout.addWidget(self.label)
+
+    def set(self, text: str, colour: str | None = None) -> None:
+        self.value.setText(text)
+        self.value.setStyleSheet(f"color:{colour};" if colour else "")
+
+
+class JobPanel(QFrame):
+    """The running job, big and clear: what it does, how far it is, how fast, how long to go."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setObjectName("JobPanel")
+        self._last_sample = 0.0
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 12, 14, 12)
+        outer.setSpacing(8)
+        top = QHBoxLayout()
+        top.setSpacing(12)
+        self.glyph = QLabel()
+        top.addWidget(self.glyph, 0, Qt.AlignmentFlag.AlignTop)
+        texts = QVBoxLayout()
+        texts.setSpacing(0)
+        self.title = QLabel()
+        self.title.setObjectName("JobTitle")
+        self.phase = QLabel()
+        self.phase.setProperty("muted", True)
+        texts.addWidget(self.title)
+        texts.addWidget(self.phase)
+        top.addLayout(texts, 1)
+        self.controls = QHBoxLayout()
+        self.controls.setSpacing(8)
+        top.addLayout(self.controls)
+        outer.addLayout(top)
+        bar_row = QHBoxLayout()
+        bar_row.setSpacing(12)
+        self.percent = QLabel("0%")
+        self.percent.setObjectName("JobPercent")
+        self.percent.setMinimumWidth(96)
+        self.bar = QProgressBar()
+        self.bar.setObjectName("JobBar")
+        self.bar.setTextVisible(False)
+        self.bar.setRange(0, 1000)
+        bar_row.addWidget(self.percent)
+        bar_row.addWidget(self.bar, 1)
+        outer.addLayout(bar_row)
+        metrics = QHBoxLayout()
+        metrics.setSpacing(28)
+        self.speed = _Metric("Speed")
+        self.graph = Sparkline()
+        self.graph.setToolTip("Reading speed over the last two minutes")
+        self.left = _Metric("Time left")
+        self.done = _Metric("Done")
+        self.items = _Metric("Files")
+        self.bad = _Metric("Unreadable")
+        self.graph.setFixedWidth(220)
+        metrics.addWidget(self.speed)
+        metrics.addWidget(self.graph)
+        metrics.addStretch(1)
+        for metric in (self.left, self.done, self.items, self.bad):
+            metrics.addWidget(metric)
+        outer.addLayout(metrics)
+        self.setVisible(False)
+
+    def add_button(self, button: QWidget) -> None:
+        self.controls.addWidget(button)
+
+    def start(self, title: str, icon_name: str) -> None:
+        t = current()
+        self.glyph.setPixmap(icons.pixmap(icon_name, 34, t.accent))
+        self.title.setText(title)
+        self.phase.setText("Starting\u2026")
+        self.percent.setText("")
+        self.bar.setRange(0, 0)  # busy until the first progress report
+        self.graph.clear()
+        self._last_sample = 0.0
+        for metric in (self.speed, self.left, self.done, self.items, self.bad):
+            metric.set("-")
+        self.items.setVisible(False)
+        self.setVisible(True)
+
+    def update_progress(self, p: Progress, paused: bool = False) -> None:
+        t = current()
+        phase = p.phase
+        if p.pass_count > 1 and not phase.startswith("Pass"):
+            phase = f"Pass {p.pass_index} of {p.pass_count}: {phase}"
+        if paused:
+            phase += " (paused)"
+        self.phase.setText(f"{phase} \u2014 {p.item}" if p.item else phase)
+        if p.total > 0:
+            self.bar.setRange(0, 1000)
+            self.bar.setValue(int(p.fraction * 1000))
+            self.percent.setText(f"{p.fraction * 100:.1f}%" if p.fraction < 0.999 else "100%")
+            self.done.set(f"{format_size(p.done)} of {format_size(p.total)}")
+        else:
+            self.bar.setRange(0, 0)
+            self.percent.setText("")
+        self.speed.set(format_rate(p.rate) if p.rate else "-")
+        now = time.monotonic()
+        if p.rate and now - self._last_sample >= 1.0:
+            self._last_sample = now
+            self.graph.add(p.rate)
+        self.left.set(format_duration(p.eta) if p.eta is not None and p.eta > 0 else "-")
+        self.items.setVisible(bool(p.items_total))
+        if p.items_total:
+            self.items.set(f"{p.items_done:,} of {p.items_total:,}")
+        self.bad.set(format_size(p.bad_bytes) if p.bad_bytes else "None",
+                     t.bad if p.bad_bytes else t.ok)
+
+    def finish(self) -> None:
+        self.setVisible(False)
+
+
+class CategoryChips(QWidget):
+    """One-click file type filters, each with how many files of that type the scan found."""
+
+    changed = Signal(str)
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__()
+        self.names = names
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        self.chips: dict[str, QToolButton] = {}
+        for name in names:
+            chip = QToolButton()
+            chip.setObjectName("Chip")
+            chip.setCheckable(True)
+            chip.setText(name)
+            chip.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            glyph = category_icon(name)
+            if glyph:
+                chip.setIcon(icons.icon(glyph))
+            self.group.addButton(chip)
+            self.chips[name] = chip
+            layout.addWidget(chip)
+            chip.toggled.connect(self._toggled)
+        layout.addStretch(1)
+        self.chips[names[0]].setChecked(True)
+
+    def _toggled(self, checked: bool) -> None:
+        if checked:
+            self.changed.emit(self.currentText())
+
+    def currentText(self) -> str:
+        for name, chip in self.chips.items():
+            if chip.isChecked():
+                return name
+        return self.names[0]
+
+    def setCurrentText(self, name: str) -> None:
+        chip = self.chips.get(name)
+        if chip is not None:
+            chip.setChecked(True)
+
+    def set_counts(self, counts: dict[str, tuple[int, int]]) -> None:
+        """counts: category -> (files, bytes). Types with no files are hidden (unless selected)."""
+        total_files = sum(c for c, _b in counts.values())
+        total_bytes = sum(b for _c, b in counts.values())
+        for name, chip in self.chips.items():
+            files, size = (total_files, total_bytes) if name == self.names[0] else counts.get(name, (0, 0))
+            short = "All" if name == self.names[0] else name.split(" & ")[0]
+            chip.setText(f"{short}  {files:,}")
+            chip.setToolTip(f"{name}: {files:,} files, {format_size(size)}")
+            chip.setVisible(bool(files) or name == self.names[0] or chip.isChecked())
+
+    def reset(self) -> None:
+        self.setCurrentText(self.names[0])
+        for name, chip in self.chips.items():
+            chip.setText("All" if name == self.names[0] else name.split(" & ")[0])
+            chip.setVisible(True)
+
+
+class Donut(QWidget):
+    """A ring chart with a number in the middle (the recovery summary)."""
+
+    def __init__(self, parts: list[tuple[float, str]], centre: str, caption: str = "") -> None:
+        super().__init__()
+        self.parts = [(v, c) for v, c in parts if v > 0]
+        self.centre = centre
+        self.caption = caption
+        self.setFixedSize(132, 132)
+
+    def paintEvent(self, _event: QEvent) -> None:
+        t = current()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        ring = QRectF(10, 10, self.width() - 20, self.height() - 20)
+        painter.setPen(QPen(QColor(t.border), 14, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+        painter.drawArc(ring, 0, 360 * 16)
+        total = sum(v for v, _c in self.parts)
+        angle = 90 * 16
+        for value, colour in self.parts:
+            span = -int(round(value / total * 360 * 16)) if total else 0
+            painter.setPen(QPen(QColor(colour), 14, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+            painter.drawArc(ring, angle, span)
+            angle += span
+        painter.setPen(QColor(t.text))
+        font = QFont(self.font())
+        font.setPointSizeF(font.pointSizeF() * 1.6)
+        font.setBold(True)
+        painter.setFont(font)
+        centre = QRectF(ring).adjusted(0, -8 if self.caption else 0, 0, -8 if self.caption else 0)
+        painter.drawText(centre, Qt.AlignmentFlag.AlignCenter, self.centre)
+        if self.caption:
+            font.setPointSizeF(self.font().pointSizeF() * 0.85)
+            font.setBold(False)
+            painter.setFont(font)
+            painter.setPen(QColor(t.muted))
+            painter.drawText(QRectF(ring).adjusted(0, 22, 0, 22), Qt.AlignmentFlag.AlignCenter, self.caption)
 
 
 def toast_level(event: Event) -> str:

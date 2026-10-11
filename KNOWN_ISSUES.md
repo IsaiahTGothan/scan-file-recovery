@@ -4,38 +4,15 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 
 ## Open issues
 
-### 1. No way to continue on another drive when the destination fills up (high)
-- **What happens:** the "Destination drive is full" banner only offers **Retry** (after freeing space), **Skip this file** and **Stop**. Skip leaves out a single file, so the next file brings the same banner back.
-- **Why it matters:** a recovery bigger than one drive has to be split by hand.
-- **Fix:** a **Continue on another drive…** button. It asks for a folder on another drive and carries on there with the remaining files, in the same folder layout, with a report on each drive. Resume should know about both drives. Also replace per-file Skip with **Skip all files that don't fit**.
-- **Workaround:** split the selection by type (**All files** dropdown, then **Tick all shown**), about 1.75 TB per drive, and run one recovery per drive from the same scan.
-
 ### 2. Scan results are not saved (high)
 - **What happens:** results live only in the open window. Closing Lifeboat, installing an update, clicking another drive in Sources, pressing Scan or Deep scan again, or the computer crashing (it happened during the Seagate recovery) throws them away. A deep scan of a 5 TB drive takes about 12 hours.
 - **Fix:** save every scan automatically (per drive, in the app data folder) and offer **Reopen last scan of this drive** when that drive is selected. An interrupted deep scan should continue where it stopped instead of starting over.
 - **Workaround:** keep the window open until every recovery from that scan is finished.
 
-### 3. No filter for "not recovered yet" (high)
-- **What happens:** after a stopped or partial recovery there's no way to tick only the files that didn't make it.
-- **Fix:** add **Not recovered yet** to the status filter, based on the last recovery's results, so a second run picks up exactly the rest.
-
 ### 4. Mac drives (HFS+) can't be browsed (high for Mac drives)
 - **What happens:** HFS+ partitions show as "HFS+, not readable". Only signature search finds files, which loses every name and folder (files come out as `JPG_00012345678.jpg`) and can break fragmented files, large videos especially.
 - **Fix:** read HFS+ itself (catalog and extents B-trees) to list live files with names, folders and dates; then deleted files where possible; then APFS.
 - **Workaround:** copy the files on a Mac, or with a read-only HFS+ reader on Windows such as HFSExplorer.
-
-### 5. Windows can go to sleep during a long job (medium)
-- **What happens:** Lifeboat doesn't keep the PC awake. If Windows sleeps, the job pauses and USB drives can drop off.
-- **Fix:** keep the system awake while a job runs (`SetThreadExecutionState`) and release it afterwards.
-- **Workaround:** Settings → System → Power → sleep **Never** while plugged in.
-
-### 6. Builds can't be told apart (medium)
-- **What happens:** every build says version 1.0.0, so there's no way to see whether an installed copy has the latest fixes.
-- **Fix:** show the build number and commit in the About box and window title, and put them in the installer file name.
-
-### 7. The "not enough space" dialog is confusing (low)
-- **What happens:** the Recover dialog shows a red "not enough space" error and a green "1.82 TB free" check at the same time. It says "Lifeboat will stop and ask you when the drive is full", but **Start recovery** stays disabled until **Recover as much as fits** is ticked.
-- **Fix:** show one clear message that says how much fits, and offer to split the selection across drives (see 1).
 
 ### 8. Verification doesn't overlap with copying (low, speed)
 - **What happens:** each file is copied and then read back before the next file starts. On hard-drive destinations this adds a lot of time.
@@ -64,8 +41,13 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 - Windows EFS-encrypted files can't be decrypted. Windows system files compressed with CompactOS (WOF) are skipped.
 - Physical damage (clicking, not spinning up, not detected) needs a clean-room lab.
 
-## Fixed on October 11, 2026
-- Drives that Windows detects but can't read were hidden: the drive list skipped any drive that didn't report its size, which is exactly what a failing drive does when it shows in Device Manager but not in Disk Management. Now such drives stay in Sources, marked **CHECK** ("Not answering", or "No media" for an empty card reader), and the new **Drive check** lists every storage device Device Manager shows (disk drives, USB storage adapters with no drive behind them, and devices with errors such as Code 43 or Code 10). For each one it says whether Disk Management can use it and whether its first sector reads, and what to try next. Also on the command line: `lifeboat-cli check`.
+## Fixed on October 11, 2026 (version 1.1.0)
+- **1. No way to continue on another drive when the destination fills up.** The Recover window now offers **Tick only what fits here** when the destination is too small: it keeps ticked, in disk order, the files that fit, and opens the Recover window again. When the recovery ends (or is stopped because the drive filled up), the summary offers **Recover the rest…**, which ticks exactly the files not recovered yet so they can go to another drive. A running recovery still can't switch drives by itself: press Stop, then Recover the rest.
+- **3. No filter for "not recovered yet".** The arrow next to **Tick all shown** has **Tick files not recovered yet** and **Untick files already recovered**, which count every recovery since the scan, plus **Tick the first half / second half** (by size, in disk order), **Tick up to a size…**, **Tick what fits on a drive…** and **Invert ticks**. Lifeboat remembers what was recovered only while it stays open, because scans aren't saved yet (issue 2).
+- **5. Windows could go to sleep during a long job.** Lifeboat now keeps the computer awake while a scan, recovery or image runs (Settings → System, on by default). The screen can still turn off.
+- **6. Builds couldn't be told apart.** The version is now 1.1.0, and the About box, `lifeboat-cli --version`, the log and the reports show the build number and commit, for example "1.1.0 (build 19, a8fa2e7)". The installer and zip file names include the build number.
+- **7. The "not enough space" dialog was confusing.** It now shows one message (what the files need, what's free) with **Tick only what fits here**, or **Start anyway** (Lifeboat stops and asks when the drive is full).
+- **13. Drives that Windows detects but can't read were hidden.** The drive list skipped any drive that didn't report its size, which is exactly what a failing drive does when it shows in Device Manager but not in Disk Management. Now such drives stay in Sources, marked **CHECK** ("Not answering", or "No media" for an empty card reader), and the new **Drive check** lists every storage device Device Manager shows (disk drives, USB storage adapters with no drive behind them, and devices with errors such as Code 43 or Code 10). For each one it says whether Disk Management can use it and whether its first sector reads, and what to try next. Also on the command line: `lifeboat-cli check`.
 - A drive waking up from sleep was reported as "The source drive disconnected" (red error and pop-up), although it answered again two seconds later. Now a drive that stops answering gets up to 30 seconds to come back. Lifeboat notes the wait in the Activity log, reads again, and reports a disconnect only if the drive is still gone after that.
 
 ## Fixed in the build from commit fb50af8 (October 9, 2026)

@@ -46,6 +46,11 @@ _CATEGORY_ICON = {
 }
 
 
+def category_icon(name: str) -> str:
+    """Icon name of a file type category ("" when it has none)."""
+    return _CATEGORY_ICON.get(name, "")
+
+
 def extension(name: str) -> str:
     _stem, dot, ext = name.rpartition(".")
     return ext.lower() if dot and _stem else ""
@@ -269,6 +274,41 @@ class Selection(QObject):
     def select_all(self, checked: bool) -> None:
         if self.root is not None:
             self.toggle(self.root, checked)
+
+    def apply_ticks(self, tick: Iterable[Node] = (), untick: Iterable[Node] = (), only: bool = False) -> None:
+        """Tick and untick many files in one go (one update, however many files).
+
+        With ``only``, every file not in ``tick`` is unticked: the ticks become exactly ``tick``.
+        """
+        if self.root is None:
+            return
+        on = {id(n) for n in tick}
+        off = {id(n) for n in untick}
+        count = size = 0
+        for node in self.root.walk():
+            if node.children is not None:
+                continue
+            key = id(node)
+            if key in on:
+                node.check = 2
+            elif key in off or only:
+                node.check = 0
+            if node.check:
+                count += 1
+                size += node.size
+        self.count, self.bytes = count, size
+        self.recount()
+        self.changed.emit()
+
+    def files(self) -> list[Node]:
+        """Every file of the scan."""
+        if self.root is None:
+            return []
+        return [n for n in self.root.walk() if n.children is None]
+
+    def shown_files(self) -> list[Node]:
+        """Every file the current filter shows, in folder order."""
+        return [n for n in self.files() if self.filter.match(n)]
 
     def selected_files(self) -> list[Node]:
         if self.root is None:

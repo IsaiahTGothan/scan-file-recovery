@@ -72,7 +72,7 @@ def _fake_dialogs(monkeypatch, destination):
             pass
 
     class FakeSummary:
-        def __init__(self, parent, summary):
+        def __init__(self, parent, summary, *rest):
             self.summary = summary
             self.show_problems = False
 
@@ -655,3 +655,210 @@ def test_drive_that_does_not_answer_is_listed_and_explained(app, monkeypatch):
     window.ov_check.click()
     assert opened == [{}]  # no job running: nothing is left out of the check
     window.close()
+
+
+def test_tick_tools_split_a_recovery_across_drives(app, images, tmp_path, monkeypatch):
+    """A recovery bigger than the destination: tick what fits, recover, then recover the rest elsewhere."""
+    import lifeboat.ui.main_window as mw
+    from lifeboat.ui import dialogs, ticking
+
+    window = mw.MainWindow()
+    window.show()
+    _pump(app)
+    path = str(image_path("fat16"))
+    info = DeviceInfo(path=path, kind="image", size=os.path.getsize(path), model="Disk image")
+    window.images.append(info)
+    window.sources.set_devices(window.devices + window.images, info.identity)
+    window.select_source(info)
+    window.quick_scan()
+    _wait(app, window)
+    shown = window._shown_files()
+    everything = {id(n) for n in shown}
+    assert len(shown) >= 4
+
+    # Halves: disjoint, together everything, and each one stretch of the drive.
+    window._tick_first_half()
+    _wait(app, window)  # looking up where the files are runs as a job
+    first = {id(n) for n in window.selection.selected_files()}
+    window._tick_second_half()
+    assert window.job is None  # positions are remembered
+    second = {id(n) for n in window.selection.selected_files()}
+    assert first and second and not first & second and first | second == everything
+    pos = window._positions
+    assert max(pos[i] for i in first) <= min(pos[i] for i in second if pos[i] >= 0)
+    window._invert_ticks()
+    assert {id(n) for n in window.selection.selected_files()} == first
+
+    # Everything ticked, but the destination only has room for part of it.
+    window._tick_all_shown()
+    ordered = ticking.disk_order(shown, pos)
+    budget = sum(ticking.size_on_disk(n) for n in ordered[: len(ordered) // 2])
+    free = budget + (64 << 20)
+    assert ticking.fill_budget(free) == budget
+    monkeypatch.setattr(mw, "free_space", lambda folder: free)
+    first_drive, second_drive = tmp_path / "drive A", tmp_path / "drive B"
+    first_drive.mkdir()
+    second_drive.mkdir()
+    answers = [("fit", first_drive), ("ok", first_drive), ("ok", second_drive)]
+    opened = []
+
+    class ScriptedRecoverDialog:
+        FIT = dialogs.RecoverDialog.FIT
+        DialogCode = dialogs.RecoverDialog.DialogCode
+
+        def __init__(self, parent, source, count, size, *rest):
+            opened.append(count)
+            self.answer, self.folder = answers.pop(0)
+            self.fit_free = free if self.answer == "fit" else -1
+
+        def exec(self):
+            return self.FIT if self.answer == "fit" else self.DialogCode.Accepted
+
+        def values(self):
+            return {"destination": str(self.folder), "job_folder": False, "verify": True, "thoroughness": "standard",
+                    "preserve_times": True, "mark_damaged": False, "resume": False}
+
+        def deleteLater(self):
+            pass
+
+    summaries = []
+
+    class Summary:
+        def __init__(self, parent, summary, *rest):
+            summaries.append(summary)
+            self.show_problems = False
+            self.recover_rest = len(summaries) == 1  # after the first drive: "Recover the other files"
+
+        def exec(self):
+            return 1
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(mw, "RecoverDialog", ScriptedRecoverDialog)
+    monkeypatch.setattr(mw, "SummaryDialog", Summary)
+    window.recover()  # "Tick only what fits here" -> ticks what fits -> the dialog opens again -> recovery
+    end = time.time() + 60
+    while len(summaries) < 2 and time.time() < end:
+        _pump(app, 0.05)
+    assert len(summaries) == 2 and not answers
+    on_a = {id(t.node) for t in summaries[0].tasks}
+    on_b = {id(t.node) for t in summaries[1].tasks}
+    assert on_a == {id(n) for n in ticking.fill(ordered, budget)}
+    assert opened[0] == len(shown) and opened[1] == len(on_a)
+    assert on_a and on_b and not on_a & on_b and on_a | on_b == everything
+    assert summaries[0].outcome == "success" and summaries[1].outcome == "success"
+    # Both recoveries count: nothing is left to recover, and the results column knows both.
+    window._tick_not_recovered()
+    assert window.selection.count == 0
+    assert all(window.list_model.results[i].status == "ok" for i in everything)
+    window.close()
+
+
+def test_settings_window_saves_restores_and_applies(app):
+    import lifeboat.ui.main_window as mw
+    from lifeboat.ui.dialogs import DEFAULTS, pref, settings
+    from lifeboat.ui.settings_dialog import SettingsDialog
+
+    settings().clear()
+    dialog = SettingsDialog(None)
+    assert dialog.values() == {k: v for k, v in DEFAULTS.items()}  # every setting has a control
+    dialog.combos["map_animation"].setCurrentIndex(2)       # Off
+    dialog.combos["text_size"].setCurrentIndex(1)           # Large
+    dialog.spins["read_timeout"].setValue(42)
+    dialog.spins["wake_seconds"].setValue(90)
+    dialog.spins["slow_seconds"].setValue(7.5)
+    dialog.checks["keep_awake"].setChecked(False)
+    dialog.save()
+    assert pref("map_animation") == "off" and pref("text_size") == "large"
+    assert pref("read_timeout") == 42 and pref("wake_seconds") == 90 and pref("slow_seconds") == 7.5
+    assert pref("keep_awake") is False
+    again = SettingsDialog(None)
+    assert again.values()["read_timeout"] == 42 and again.values()["map_animation"] == "off"
+    again.restore_defaults()
+    assert again.values() == {k: v for k, v in DEFAULTS.items()}
+    assert pref("read_timeout") == 42  # nothing is stored until Save
+
+    # The window applies them right away: the reading limits of the open source, the map mode.
+    window = mw.MainWindow()
+    image = DeviceInfo(path=str(image_path("fat16")), kind="image", size=0, model="Disk image")
+    if os.path.exists(image.path):
+        image.size = os.path.getsize(image.path)
+        window.select_source(image)
+        assert window.reader.policy.timeout == 42 and window.reader.policy.wake_seconds == 90
+        assert window.reader.policy.slow_seconds == 7.5
+    assert window.diskmap.mode == "off"
+    settings().setValue("read_timeout", 9)
+    settings().setValue("map_animation", "light")
+    window.apply_settings()
+    assert window.diskmap.mode == "light"
+    if window.reader is not None:
+        assert window.reader.policy.timeout == 9
+    window.close()
+    settings().clear()
+    from lifeboat.ui.dialogs import apply_appearance
+
+    apply_appearance(app)  # back to the defaults for the other tests
+
+
+def test_disk_map_animates_only_while_something_moves(app):
+    from lifeboat.rescue.sectormap import SectorMap, State
+    from lifeboat.ui.widgets import DiskMap
+
+    sector_map = SectorMap(1 << 30)
+    disk_map = DiskMap()
+    disk_map.resize(600, 200)
+    disk_map.set_map(sector_map)
+    assert not disk_map.animating  # not on screen: nothing runs
+    disk_map.show()
+    _pump(app, 0.1)
+    assert disk_map._cells and not disk_map.animating  # nothing changed yet
+    sector_map.set(0, 1 << 28, State.GOOD)
+    disk_map.refresh()
+    assert disk_map._fades and disk_map.animating  # changed blocks fade in
+    _wait_for(app, lambda: not disk_map.animating, timeout=3)  # and then it stops on its own
+    assert disk_map.frames_drawn > 3
+
+    disk_map.set_head(1 << 28)
+    _pump(app, 0.3)
+    assert disk_map.animating  # the block being read glows while a job runs
+    disk_map.window().showMinimized()
+    _pump(app, 0.2)
+    disk_map.window().showNormal()
+    disk_map.set_head(None)
+    _wait_for(app, lambda: not disk_map.animating, timeout=3)
+
+    disk_map.set_mode("off")
+    sector_map.set(1 << 28, 1 << 29, State.BAD)
+    disk_map.refresh()
+    disk_map.set_head(1 << 29)
+    assert not disk_map.animating and not disk_map._fades  # off: no frames at all
+    disk_map.set_head(None)
+
+    text = disk_map.describe(0)
+    assert text.startswith("Block 1 of") and "Read OK" in text
+    last = disk_map.describe(len(disk_map._cells) - 1)
+    assert "Not read yet" in last
+    assert disk_map.block_bytes() == (1 << 30) // len(disk_map._cells)
+    disk_map.close()
+
+
+def test_job_panel_shows_progress(app):
+    from lifeboat.events import Progress
+    from lifeboat.ui.widgets import JobPanel
+
+    panel = JobPanel()
+    panel.start("Deep scan of Disk 1", "radar")
+    assert panel.isVisibleTo(None) or not panel.isHidden()
+    panel.update_progress(Progress("Reading the whole drive", done=55, total=100, rate=148e6, eta=3600,
+                                   bad_bytes=1 << 20, pass_index=1, pass_count=3, items_done=3, items_total=9))
+    assert panel.percent.text() == "55.0%"
+    assert panel.phase.text() == "Pass 1 of 3: Reading the whole drive"
+    assert panel.left.value.text() == "1 h 00 min"
+    assert panel.bad.value.text() == "1.00 MB" and panel.items.value.text() == "3 of 9"
+    assert len(panel.graph.values) == 1
+    panel.update_progress(Progress("Reading", done=56, total=100, rate=150e6), paused=True)
+    assert panel.phase.text().endswith("(paused)")
+    assert len(panel.graph.values) == 1  # one speed sample a second
+    panel.finish()
+    assert panel.isHidden()

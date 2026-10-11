@@ -84,9 +84,14 @@ def _palette(t: Theme) -> QPalette:
     return p
 
 
-def stylesheet(t: Theme) -> str:
+TEXT_SIZES = {"normal": 10.0, "large": 11.5}
+
+
+def stylesheet(t: Theme, text_size: str = "normal", density: str = "comfortable") -> str:
+    points = TEXT_SIZES.get(text_size, 10.0)
+    row_pad = "1px 4px" if density == "compact" else "3px 4px"
     return f"""
-QWidget {{ font-size: 10pt; }}
+QWidget {{ font-size: {points}pt; }}
 QToolTip {{ color: {t.text}; background: {t.raised}; border: 1px solid {t.border}; padding: 6px; border-radius: 6px; }}
 QMainWindow, QDialog {{ background: {t.window}; }}
 #HeaderBar {{ background: {t.panel}; border-bottom: 1px solid {t.border}; }}
@@ -120,7 +125,7 @@ QComboBox QAbstractItemView {{ background: {t.raised}; color: {t.text}; border: 
 QTreeView, QTableView, QListView, QPlainTextEdit, QTextBrowser {{ background: {t.panel}; color: {t.text};
   border: 1px solid {t.border}; border-radius: 8px; alternate-background-color: {t.panel_alt};
   selection-background-color: {t.selection}; selection-color: {t.text}; }}
-QTreeView::item, QTableView::item {{ padding: 3px 4px; }}
+QTreeView::item, QTableView::item {{ padding: {row_pad}; }}
 QHeaderView::section {{ background: {t.panel_alt}; color: {t.muted}; border: none;
   border-bottom: 1px solid {t.border}; padding: 6px 8px; font-weight: 600; }}
 QTabWidget::pane {{ border: 1px solid {t.border}; border-radius: 8px; top: -1px; background: {t.panel}; }}
@@ -156,6 +161,27 @@ QMenu::item:selected {{ background: {t.selection}; }}
 #Toast[level="info"] {{ border-left: 4px solid {t.info}; }}
 #ToastTitle {{ font-weight: 700; }}
 #Pill {{ border-radius: 9px; padding: 1px 8px; font-size: 9pt; font-weight: 600; }}
+QToolButton#TickButton {{ background: {t.raised}; border: 1px solid {t.border}; border-radius: 8px;
+  padding: 6px 26px 6px 10px; }}
+QToolButton#TickButton:hover {{ border-color: {t.accent}; }}
+QToolButton#TickButton::menu-button {{ border-left: 1px solid {t.border}; width: 20px; }}
+#JobPanel {{ background: {t.panel}; border: 1px solid {t.border}; border-left: 4px solid {t.accent};
+  border-radius: 10px; }}
+#JobPercent {{ font-size: {points * 2.1:.1f}pt; font-weight: 800; color: {t.text}; }}
+#JobTitle {{ font-size: {points * 1.15:.1f}pt; font-weight: 700; }}
+#MetricValue {{ font-size: {points * 1.15:.1f}pt; font-weight: 700; }}
+#MetricLabel {{ color: {t.muted}; font-size: {points * 0.85:.1f}pt; }}
+QProgressBar#JobBar {{ height: 12px; border-radius: 6px; }}
+QProgressBar#JobBar::chunk {{ border-radius: 5px; background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+  stop:0 {t.accent}, stop:1 #ffb03a); }}
+QToolButton#Chip {{ background: {t.panel_alt}; border: 1px solid {t.border}; border-radius: 14px;
+  padding: 4px 12px; color: {t.text}; }}
+QToolButton#Chip:hover {{ border-color: {t.accent}; }}
+QToolButton#Chip:checked {{ background: {t.selection}; border-color: {t.accent}; font-weight: 700; }}
+QListWidget#SettingsNav {{ background: {t.panel}; border: 1px solid {t.border}; border-radius: 10px; padding: 6px; }}
+QListWidget#SettingsNav::item {{ padding: 8px 10px; border-radius: 7px; }}
+QListWidget#SettingsNav::item:selected {{ background: {t.selection}; color: {t.text}; }}
+#SettingHint {{ color: {t.muted}; font-size: {points * 0.9:.1f}pt; }}
 """
 
 
@@ -214,7 +240,7 @@ QRadioButton::indicator:checked {{ image: url("{paths['radio_on']}"); }}
 """
 
 
-def apply(app: QApplication, name: str = "dark") -> Theme:
+def apply(app: QApplication, name: str = "dark", text_size: str = "normal", density: str = "comfortable") -> Theme:
     global _current
     if name == "system":
         hints = app.styleHints()
@@ -232,10 +258,9 @@ def apply(app: QApplication, name: str = "dark") -> Theme:
         indicators = _indicator_rules(_indicator_files(theme))
     except Exception:  # noqa: BLE001 - fall back to the default indicators
         indicators = ""
-    app.setStyleSheet(stylesheet(theme) + indicators)
+    app.setStyleSheet(stylesheet(theme, text_size, density) + indicators)
     font = app.font()
-    if font.pointSizeF() < 9.5:
-        font.setPointSizeF(10)
+    font.setPointSizeF(TEXT_SIZES.get(text_size, 10.0))
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
     app.setFont(font)
     return theme

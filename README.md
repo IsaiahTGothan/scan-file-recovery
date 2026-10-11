@@ -36,10 +36,12 @@ Every push to this repository builds and tests Lifeboat on Windows. To get the i
 
 1. Open the repository's **Actions** tab, then the latest successful **Build and test** run.
 2. Under **Artifacts**, download **Lifeboat-Windows**. It contains:
-   * `Lifeboat-Setup-1.0.0.exe`: the installer (Start menu entry, optional desktop icon, uninstaller).
-   * `Lifeboat-1.0.0-portable.zip`: the same app with no installation. Unzip it and run `Lifeboat.exe`.
+   * `Lifeboat-Setup-1.1.0-build19.exe`: the installer (Start menu entry, optional desktop icon, uninstaller).
+   * `Lifeboat-1.1.0-build19-portable.zip`: the same app with no installation. Unzip it and run `Lifeboat.exe`.
 
-Pushing a version tag (for example `v1.0.0`) also publishes both files as a GitHub Release.
+   The build number (19 here) is the number of the Actions run. The About box shows it too, so you can always tell which build is installed.
+
+Pushing a version tag (for example `v1.1.0`) also publishes both files as a GitHub Release.
 
 Lifeboat asks for **administrator rights** when it starts (the UAC prompt). Windows only allows direct disk access to administrators. Because the app isn't code-signed yet, SmartScreen may say "Windows protected your PC". Click **More info → Run anyway**.
 
@@ -49,15 +51,23 @@ Requirements: Windows 10 or 11, 64-bit.
 
 1. **Pick the drive.** Connect the failing drive and select it under **Sources**. The overview shows its model, capacity, sector size, connection and, when Windows can read it, its SMART health.
 2. **Scan it.** Click **Scan**. Lifeboat reads the partition table and the file tables (NTFS MFT, FAT, exFAT) and rebuilds the folders, including deleted files and folders. If partitions are missing or the drive was formatted, use **Deep scan**: it reads the whole drive to find lost partitions and to recognise files by their content.
-3. **Tick your files.** Browse folders, search (`*.jpg`, `invoice`), filter by type (photos, videos, documents...) or by existing/deleted, and press **Preview** to look inside a file first. The **Chance** column estimates how recoverable each file is.
+3. **Tick your files.** Browse folders, search (`*.jpg`, `invoice`), filter by type with one click (the chips above the list show how many photos, videos, documents... were found) or by existing/deleted, and press **Preview** to look inside a file first. The **Chance** column estimates how recoverable each file is. The arrow next to **Tick all shown** has more ways to tick:
+   * **Tick the first half / second half**: split a recovery that is too big for one drive. The halves are split by size, in disk order, so each one is one stretch of the source drive.
+   * **Tick up to a size…** and **Tick what fits on a drive…** (pick a folder on the destination; Lifeboat fills its free space in disk order).
+   * **Tick files not recovered yet** and **Untick files already recovered**: every recovery since the scan counts.
+   * **Invert ticks**, **Untick all**.
 4. **Recover.** Click **Recover N files**, choose a folder on a different drive, and pick how hard to try:
    * **Quick**: copy what reads easily and never retry.
    * **Standard** (recommended): then go back for the skipped and damaged areas, sector by sector.
    * **Maximum**: Standard, plus three more tries on every bad sector.
 
-   Before anything is written, Lifeboat checks the destination. It refuses a folder on the drive being recovered, warns when space is short, and warns about FAT32's 4 GB file limit. Each recovery gets its own dated folder containing your files, `Lifeboat Report.html` and `Lifeboat Report.csv`.
+   Before anything is written, Lifeboat checks the destination. It refuses a folder on the drive being recovered, warns about FAT32's 4 GB file limit, and when space is short offers **Tick only what fits here**. Each recovery gets its own dated folder containing your files, `Lifeboat Report.html` and `Lifeboat Report.csv`.
 
-You can **Pause**, **Stop** (everything recovered so far is kept) or **Finish now** (skip the remaining retry passes) at any time. To continue a stopped recovery, start a recovery into the same folder and tick **Resume**. Files that were already verified are skipped.
+   **More files than one drive holds?** Use **Tick only what fits here** (or Stop when the drive is full). When the recovery is done, the summary offers **Recover the rest…**: it ticks exactly the files not recovered yet, and you pick another drive.
+
+While a job runs, the panel at the top shows how far it is, the reading speed (with a graph of the last two minutes), the time left and how much couldn't be read. The **Disk map** tab shows every part of the drive: blocks light up as they're read, the block being read glows, and pointing at a block tells you what it holds. You can **Pause**, **Stop** (everything recovered so far is kept) or **Finish now** (skip the remaining retry passes) at any time. To continue a stopped recovery, start a recovery into the same folder and tick **Resume**. Files that were already verified are skipped. Lifeboat keeps the computer from sleeping while a job runs.
+
+**Settings** (the gear at the top right): theme, text size and row spacing, the disk map animation (Smooth, Light or Off), notifications and pop-ups, the Recover window's defaults, how long to wait for slow or sleeping drives, and keeping the computer awake.
 
 ## When the drive is really failing
 
@@ -149,9 +159,10 @@ python -m pip install -e ".[dev]" pillow
 python -m lifeboat                      # desktop app
 python -m lifeboat scan disk.img        # command line
 python -m pytest -q                     # tests (the filesystem-image tests need Linux, see below)
+python packaging/stamp_build.py         # optional: build number and commit for the About box
 python packaging/make_icon.py           # icon and installer images
 pyinstaller packaging/lifeboat.spec --noconfirm
-ISCC /DAppVersion=1.0.0 packaging\installer.iss    # Windows installer (Inno Setup 6)
+ISCC /DAppVersion=1.1.0 packaging\installer.iss    # Windows installer (Inno Setup 6)
 ```
 
 The test suite builds real NTFS, FAT12/16/32 and exFAT images with the reference Linux tools (`mkntfs`/`ntfs-3g`, `mkfs.vfat`/`mtools`, `mkfs.exfat`/`exfat-fuse`, `sfdisk`, `sgdisk`). It needs those tools and root for FUSE mounts. CI runs:
