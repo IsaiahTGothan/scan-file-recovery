@@ -1,0 +1,35 @@
+{
+ "disk": {
+  "filesystem": "APFS",
+  "layout": "GPTSPUD",
+  "label": "LBOPEN",
+  "block_size": 4096,
+  "macos": "15.7.9",
+  "encrypted_volume": {
+   "name": "LBLocked",
+   "password": "lifeboat",
+   "file": "secret.txt",
+   "sha256": "be978a99a9f744f373d75eb493121f14c59ab750714d2b79e99355b88364f03a",
+   "size": 3000
+  }
+ },
+ "image_size": 629145600,
+ "files": [
+  {
+   "path": "Photos/IMG_0001.HEIC",
+   "size": 307217,
+   "sha256": "b7fbbc306763bf3776231d9cbf9101483e0930a7387c505261c3c72362e08a5f",
+   "deleted": false,
+   "mtime": 1767225600,
+   "flags": 0
+  },
+  {
+   "path": "readme.txt",
+   "size": 1234,
+   "sha256": "904c19d3cd58b06ce3ab4cabba423a6375e6469a73961bdcfe376af2fdfc71af",
+   "deleted": false,
+   "mtime": 1234567890,
+   "flags": 0
+  }
+ ]
+}
