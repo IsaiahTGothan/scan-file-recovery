@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import build_info
-from ..branding import APP_FULL_NAME, PUBLISHER, PUBLISHER_URL, TAGLINE, owner_logo
+from ..branding import APP_FULL_NAME, PUBLISHER, PUBLISHER_URL, SETTINGS_ORG, TAGLINE, owner_logo
 from ..device.base import DeviceInfo
 from ..errors import E_DEST_SPACE
 from ..fs.carving import GROUPS
@@ -37,7 +37,6 @@ from . import icons
 from .theme import current
 from .widgets import Donut, StatCard
 
-ORG = "Zays"
 APP = os.environ.get("LIFEBOAT_SETTINGS_NAME", "Lifeboat")  # the test-suite uses its own settings
 
 # Every preference and its default, in one place (Settings > Restore defaults uses these).
@@ -66,7 +65,7 @@ DEFAULTS: dict[str, object] = {
 
 
 def settings() -> QSettings:
-    return QSettings(ORG, APP)
+    return QSettings(SETTINGS_ORG, APP)
 
 
 def setting_bool(key: str, default: bool) -> bool:
@@ -564,7 +563,7 @@ class AboutDialog(QDialog):
                 owner_label = QLabel()
                 owner_label.setPixmap(pix.scaledToHeight(48, Qt.TransformationMode.SmoothTransformation))
                 by.addWidget(owner_label)
-        publisher = QLabel(f'by <a href="{PUBLISHER_URL}">{PUBLISHER}</a>')
+        publisher = QLabel(f'Developed by <a href="{PUBLISHER_URL}">{PUBLISHER}</a>')
         publisher.setOpenExternalLinks(True)
         by.addWidget(publisher)
         by.addStretch(1)

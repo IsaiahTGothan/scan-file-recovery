@@ -10,7 +10,7 @@
   #define FileTag AppVersion
 #endif
 #define AppName "Lifeboat Data Recovery"
-#define AppPublisher "Zays"
+#define AppPublisher "ZAYS"
 #define AppURL "https://zays.us"
 #define AppExe "Lifeboat.exe"
 
@@ -42,6 +42,8 @@ MinVersion=10.0
 CloseApplications=yes
 VersionInfoVersion={#AppVersion}
 VersionInfoCompany={#AppPublisher}
+VersionInfoCopyright=Copyright (c) {#AppPublisher}
+AppCopyright=Copyright (c) {#AppPublisher}
 VersionInfoDescription={#AppName} installer
 
 [Languages]

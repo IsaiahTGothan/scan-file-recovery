@@ -8,8 +8,12 @@ from pathlib import Path
 APP_NAME = "Lifeboat"
 APP_FULL_NAME = "Lifeboat Data Recovery"
 APP_ID = "Zays.Lifeboat"
-PUBLISHER = "Zays"
+# The developer, as named in the app, the Windows file details and installer, and the Mac app info.
+PUBLISHER = "ZAYS"
 PUBLISHER_URL = "https://zays.us"
+CREDIT = f"developed by {PUBLISHER}"
+# Where settings are saved. Never rename it: everyone's saved settings would be left behind.
+SETTINGS_ORG = "Zays"
 TAGLINE = "Get your files off a failing drive."
 
 # Brand palette (life-ring orange on deep navy).

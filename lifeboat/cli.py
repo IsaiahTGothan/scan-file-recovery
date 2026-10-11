@@ -24,7 +24,7 @@ import time
 from typing import NoReturn
 
 from . import build_info
-from .branding import APP_FULL_NAME
+from .branding import APP_FULL_NAME, CREDIT
 from .device.base import DeviceInfo
 from .device.enumerate import list_devices, open_device
 from .device.image import ImageDevice
@@ -285,8 +285,8 @@ class _Parser(argparse.ArgumentParser):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = _Parser(prog="lifeboat-cli", description=f"{APP_FULL_NAME} {build_info()}")
-    parser.add_argument("--version", action="version", version=f"{APP_FULL_NAME} {build_info()}")
+    parser = _Parser(prog="lifeboat-cli", description=f"{APP_FULL_NAME} {build_info()}, {CREDIT}")
+    parser.add_argument("--version", action="version", version=f"{APP_FULL_NAME} {build_info()}, {CREDIT}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("devices", help="list drives")

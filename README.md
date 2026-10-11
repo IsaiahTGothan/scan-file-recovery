@@ -5,7 +5,7 @@
 <h1 align="center">Lifeboat Data Recovery</h1>
 <p align="center"><b>Get your files off a failing drive.</b><br>
 Read-only, bad-sector aware, and it tells you about every problem.<br>
-by Zays</p>
+developed by ZAYS</p>
 
 ---
 
@@ -205,4 +205,4 @@ Lifeboat never opens a source for writing. All reads go through the rescue reade
 
 ---
 
-Lifeboat Data Recovery © Zays. Built with Python and Qt for Python (PySide6, LGPL v3).
+Lifeboat Data Recovery © ZAYS. Built with Python and Qt for Python (PySide6, LGPL v3).

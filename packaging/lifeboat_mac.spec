@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(SPECPATH).parent  # noqa: F821 - provided by PyInstaller
 sys.path.insert(0, str(ROOT))
 from lifeboat import __version__, build_info  # noqa: E402
-from lifeboat.branding import APP_FULL_NAME, PUBLISHER  # noqa: E402
+from lifeboat.branding import APP_FULL_NAME, CREDIT, PUBLISHER  # noqa: E402
 
 
 def oldest_macos() -> str:
@@ -89,7 +89,7 @@ BUNDLE(  # noqa: F821
         "CFBundleDisplayName": APP_FULL_NAME,
         "CFBundleShortVersionString": __version__,
         "CFBundleVersion": bundle_version(),
-        "CFBundleGetInfoString": f"{APP_FULL_NAME} {build_info()} by {PUBLISHER}",
+        "CFBundleGetInfoString": f"{APP_FULL_NAME} {build_info()}, {CREDIT}",
         "NSHumanReadableCopyright": f"Copyright © {PUBLISHER}",
         "LSMinimumSystemVersion": oldest_macos(),
         "LSApplicationCategoryType": "public.app-category.utilities",

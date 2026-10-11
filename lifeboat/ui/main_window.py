@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..branding import APP_FULL_NAME, APP_NAME, PUBLISHER, TAGLINE, owner_logo
+from ..branding import APP_FULL_NAME, APP_NAME, CREDIT, TAGLINE, owner_logo
 from ..device.base import NO_MEDIA, NOT_ANSWERING, BlockDevice, DeviceInfo
 from ..device.check import system_tool
 from ..device.enumerate import is_admin, list_devices, open_device
@@ -256,7 +256,7 @@ class MainWindow(QMainWindow):
             if not pix.isNull():
                 brand = QLabel()
                 brand.setPixmap(pix.scaledToHeight(30, Qt.TransformationMode.SmoothTransformation))
-                brand.setToolTip(f"{APP_FULL_NAME} by {PUBLISHER}")
+                brand.setToolTip(f"{APP_FULL_NAME}, {CREDIT}")
                 layout.addWidget(brand)
         self.btn_settings = _tool("", "settings", "Settings")
         self.btn_help = _tool("", "help", "About Lifeboat")

@@ -10,7 +10,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING
 
 from .. import __version__
-from ..branding import APP_FULL_NAME, APP_ID, PUBLISHER
+from ..branding import APP_FULL_NAME, APP_ID, SETTINGS_ORG
 from ..logsetup import setup_logging
 
 if TYPE_CHECKING:
@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication(sys.argv if argv is None else argv)
     app.setApplicationName("Lifeboat")
     app.setApplicationDisplayName(APP_FULL_NAME)
-    app.setOrganizationName(PUBLISHER)
+    app.setOrganizationName(SETTINGS_ORG)
     app.setApplicationVersion(__version__)
     app.setQuitOnLastWindowClosed(True)
 
