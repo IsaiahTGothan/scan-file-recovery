@@ -277,7 +277,10 @@ def test_problem_bursts_are_summarised(app, monkeypatch):
     assert window.problems_model.rowCount() - before == 300
     assert 1 <= len(toasts) <= 4, toasts
     assert toasts[0][:3] == ("error", "File could not be recovered", "Not recovered: file 0")
-    assert toasts[-1][1] == "299 more problems"
+    # On a slow machine the burst can outlast the gap, so another problem gets its own pop-up;
+    # either way the summary counts exactly the ones that didn't.
+    own = sum(1 for t in toasts if not t[1].endswith("more problems"))
+    assert toasts[-1][1] == f"{300 - own:,} more problems"
     window.close()
 
 

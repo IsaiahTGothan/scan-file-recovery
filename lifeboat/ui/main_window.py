@@ -156,6 +156,7 @@ class MainWindow(QMainWindow):
         self._pending_tick: tuple[str, object, list[Node]] | None = None  # waits for the positions
         self._recover_after_tick = False           # "Tick only what fits" from the Recover dialog
         self._remaining: list[Node] = []           # files being split across drives: what's left is offered
+        self._toast_mode = str(pref("toasts"))
         self._build()
         self._connect()
         self.diskmap.set_mode(str(pref("map_animation")))
@@ -1384,7 +1385,7 @@ class MainWindow(QMainWindow):
             self.tabs.tabBar().setTabTextColor(1, QColor(colour))
         wanted = False
         if event.level >= Level.WARNING:  # Settings > Notifications > Pop-ups in the window
-            mode = str(pref("toasts"))
+            mode = self._toast_mode  # read once, not per event: a dying drive can fail thousands of files
             wanted = (event.level == Level.CRITICAL or mode == "all"
                       or (mode == "errors" and event.level >= Level.ERROR))
         if wanted:
@@ -1765,6 +1766,7 @@ class MainWindow(QMainWindow):
                                                           "the next time you press Recover.")
 
     def apply_settings(self) -> None:
+        self._toast_mode = str(pref("toasts"))
         apply_appearance(QApplication.instance())
         icons.clear_cache()
         self._apply_row_heights()
