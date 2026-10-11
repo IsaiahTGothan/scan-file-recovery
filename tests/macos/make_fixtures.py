@@ -250,6 +250,18 @@ class Disk:
             self.files[rel] = {"path": rel, "size": size, "sha256": hashlib.sha256(blob).hexdigest(),
                                "deleted": False, "mtime": None}
 
+    def snapshot(self) -> str:
+        """Take an APFS snapshot of the test volume; say how (or why not)."""
+        tool = "/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_snapshot"
+        attempts = [[tool, "-c", "lifeboat-test", str(self.mount)]] if os.path.exists(tool) else []
+        attempts.append(["tmutil", "localsnapshot", str(self.mount)])
+        for cmd in attempts:
+            res = run(cmd, check=False)
+            if res.returncode == 0:
+                listed = run(["diskutil", "apfs", "listSnapshots", str(self.mount)], check=False)
+                return f"{cmd[0]}: {listed.stdout.strip()[-500:]}"
+        return "failed"
+
     def fill(self, rel: str, keep: int) -> None:
         """Write zeros until the disk is full (free space as reported is not all usable on APFS),
         then give ``keep`` bytes back."""
@@ -284,9 +296,7 @@ class Disk:
         self.write("Deleted/folder/photo.jpg", content("del-photo", 90 * KiB))
         self.sync()
         if snapshot:
-            tool = "/System/Library/Filesystems/apfs.fs/Contents/Resources/apfs_snapshot"
-            res = run([tool, "-c", "lifeboat-test", str(self.mount)], check=False)
-            self.notes["snapshot"] = "lifeboat-test" if res.returncode == 0 else f"failed: {res.stderr.strip()}"
+            self.notes["snapshot"] = self.snapshot()
             self.sync()
         self.write("Deleted/after snapshot.pdf", content("del-after", 150 * KiB))
         self.write("Deleted/small note.txt", text("del-small", 900))
