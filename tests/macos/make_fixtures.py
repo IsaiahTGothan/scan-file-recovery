@@ -21,6 +21,7 @@ Run on macOS as root (snapshots need it):  sudo python tests/macos/make_fixtures
 
 from __future__ import annotations
 
+import errno
 import gzip
 import hashlib
 import json
@@ -216,10 +217,7 @@ class Disk:
         for i, rel in enumerate(pieces):
             self.write(rel, content(f"piece{i}", 24 * KiB))
         self.sync()
-        stat = os.statvfs(self.mount)
-        free = stat.f_bavail * stat.f_frsize
-        filler = max(0, free - 3 * MiB)
-        self.write("Fragmented/filler.bin", content("filler", filler))
+        self.fill("Fragmented/filler.bin", keep=3 * MiB)
         self.sync()
         for rel in pieces[::2]:
             self.delete(rel)
@@ -229,6 +227,34 @@ class Disk:
         self.sync()
         self.delete("Fragmented/filler.bin")
         self.sync()
+
+    def fill(self, rel: str, keep: int) -> None:
+        """Write zeros until the disk is full (free space as reported is not all usable on APFS),
+        then give ``keep`` bytes back."""
+        path = self.mount / rel
+        chunk = bytes(MiB)
+        written = 0
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+        try:
+            while True:
+                try:
+                    count = os.write(fd, chunk)
+                except OSError as exc:
+                    if exc.errno != errno.ENOSPC:
+                        raise
+                    break
+                written += count
+                if count < len(chunk):
+                    break
+        finally:
+            os.close(fd)
+        size = max(0, written - keep)
+        os.truncate(path, size)
+        digest = hashlib.sha256()
+        for start in range(0, size, MiB):
+            digest.update(chunk[:min(MiB, size - start)])
+        self.files[rel] = {"path": rel, "size": size, "sha256": digest.hexdigest(), "deleted": False,
+                           "mtime": None}
 
     def deleted(self, snapshot: bool) -> None:
         self.write("Deleted/before snapshot.jpg", content("del-snap", 400 * KiB), mtime=T_NEW)
