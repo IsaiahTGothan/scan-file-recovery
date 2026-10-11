@@ -865,3 +865,64 @@ def test_job_panel_shows_progress(app):
     assert len(panel.graph.values) == 1  # one speed sample a second
     panel.finish()
     assert panel.isHidden()
+
+
+def test_unlock_an_encrypted_mac_volume(app, disks, monkeypatch):
+    """A scan of a drive with an encrypted Mac volume selects it and offers Unlock; a wrong password
+    asks again; the right one fills the volume in, keeping the ticks of the rest."""
+    if "apfs_locked" not in disks:
+        pytest.skip("test disk not made yet")
+    pytest.importorskip("cryptography")
+    import lifeboat.ui.main_window as mw
+
+    image, manifest = disks["apfs_locked"]
+    secret = manifest["disk"].get("encrypted_volume")
+    if not isinstance(secret, dict):
+        pytest.skip("macOS didn't make the encrypted volume")
+    answers = ["not the password", secret["password"]]
+    asked: list[tuple[str, str, str]] = []
+
+    class FakeUnlock:
+        DialogCode = QtWidgets.QDialog.DialogCode
+
+        def __init__(self, parent, name, hint="", error=""):
+            asked.append((name, hint, error))
+
+        def exec(self):
+            return QtWidgets.QDialog.DialogCode.Accepted
+
+        def password(self):
+            return answers.pop(0)
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(mw, "UnlockDialog", FakeUnlock)
+    window = mw.MainWindow()
+    window.show()
+    _pump(app)
+    info = DeviceInfo(path=str(image), kind="image", size=os.path.getsize(image), model="Disk image")
+    window.images.append(info)
+    window.sources.set_devices(window.devices + window.images, info.identity)
+    window.select_source(info)
+    window.quick_scan()
+    _wait(app, window)
+    locked = window._locked_volumes(window.result)
+    assert len(locked) == 1 and "locked" in window.found_label.text()
+    assert window.preview.node is locked[0]                 # selected after the scan, Unlock offered
+    assert window.preview.unlock.isVisibleTo(window.preview) and not window.preview.button.isVisibleTo(window.preview)
+    readme = next(n for n in window.result.root.walk() if n.name == "readme.txt")
+    window.selection.toggle(readme, True)
+
+    window.preview.unlock.click()                           # the wrong password first...
+    _wait(app, window)
+    _pump(app)                                              # ...so it asks again, with the reason
+    _wait(app, window)
+    _pump(app)
+    assert len(asked) == 2 and not asked[0][2] and "doesn't open" in asked[1][2]
+    assert not window._locked_volumes(window.result)
+    assert readme.check == 2 and window.selection.count == 1
+    assert secret["password"] in window.passwords and "not the password" not in window.passwords
+    found = next(n for n in window.result.root.walk() if n.name == secret["file"])
+    assert found.volume is not None
+    window.close()

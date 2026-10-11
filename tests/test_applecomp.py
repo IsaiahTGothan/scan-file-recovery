@@ -79,3 +79,22 @@ def test_resource_fork_tables():
     struct.pack_into("<I", head, 0x104, 2)
     struct.pack_into("<4I", head, 0x108, 20, 30, 50, 7)
     assert chunk_table(4, bytes(head), size, 0x200) == [(0x104 + 20, 30), (0x104 + 50, 7)]
+
+
+def test_self_tests_pass_and_catch_a_broken_decoder(monkeypatch, capsys):
+    """The checks the packaged app runs (--smoke-test, lifeboat-cli selftest) pass, and fail loudly
+    when a decoder is broken."""
+    from lifeboat import cli
+    from lifeboat.fs import applecomp
+
+    applecomp.self_test()
+    pytest.importorskip("cryptography")
+    from lifeboat.fs import apfs_crypto
+
+    apfs_crypto.self_test()
+    assert cli.main(["selftest"]) == 0
+    assert "Self-test passed" in capsys.readouterr().out
+    monkeypatch.setattr(applecomp, "_TEST_FSE", applecomp._TEST_FSE[:-20] + bytes(16) + b"bvx$")
+    assert cli.main(["selftest"]) == 1
+    out = capsys.readouterr().out
+    assert "FAILED  LZFSE" in out and "OK      AES" in out

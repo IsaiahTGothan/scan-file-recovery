@@ -533,3 +533,27 @@ def lzfse_decompress(src: bytes) -> bytes:
             pos = _decode_block(src, pos, out, magic == b"bvx2")
         else:
             raise CompressionError("not an LZFSE block")
+
+
+# Known answers, made by Apple's reference encoder (github.com/lzfse/lzfse): an FSE-coded block
+# ("bvx2") and an LZVN one ("bvxn"). ``self_test`` decodes both.
+_TEST_FSE = bytes.fromhex(
+    "627678325014000028005001000b0070c6493baca4180000a70000003f28c00d97bf0030010080091300600200afc03cfa51ee0100"
+    "b80700e01e00000000000000000000be0600000000000000e0c7000000e037e00578015e8017e00578015e0000000000005e0000"
+    "0000008017e005780178347e03f80de0378017005e8077e2057801000000000000000000000000000000000000000000000000000000"
+    "000000000000000000309b60e3472364f54854fa98a366ee47d3fbd77f00000000000000000098cbff03cdffdb406830101cd6f400"
+    "62767824")
+_TEST_LZVN = bytes.fromhex(
+    "6276786ed400000088000000e01e4c696665626f6174206765747320796f75722066696c6573206f66662061206661696c696e67"
+    "2064726976652e20382ef042e03a303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f50515253545556"
+    "5758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f70717273747576777879060000000000000062767824")
+
+
+def self_test() -> None:
+    """Decode the known answers above (raises if one comes out wrong)."""
+    fse = b"".join(b"Lifeboat %d rescues files. " % (i % 7) for i in range(200))
+    if lzfse_decompress(_TEST_FSE) != fse:
+        raise CompressionError("LZFSE (FSE block) gives the wrong answer")
+    lzvn = b"Lifeboat gets your files off a failing drive. " * 3 + bytes(range(48, 122))
+    if lzfse_decompress(_TEST_LZVN) != lzvn:
+        raise CompressionError("LZFSE (LZVN block) gives the wrong answer")

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from ..rescue.reader import ReadMode, RescueReader
 from .applecomp import CompressionError, decompress_chunk
 from .lznt1 import LZNT1Error, decompress
-from .model import INVALID, SPARSE, FileLayout
+from .model import INVALID, SPARSE, Extent, FileLayout
 
 OK = 0
 UNREAD = 1
@@ -102,7 +102,9 @@ class FileContentReader:
                 chunk.states.append((lo, hi, BAD))
                 continue
             read_hi = min(hi, max(lo, valid))
-            if read_hi > lo:
+            if read_hi > lo and self.layout.xts_key is not None and ext.tweak >= 0:
+                self._read_encrypted(chunk, lo, read_hi, ext, mode)
+            elif read_hi > lo:
                 self._read_disk(chunk, lo, read_hi, ext.disk_offset + (lo - ext.file_offset), mode)
             if read_hi < hi:
                 chunk.states.append((max(lo, read_hi), hi, OK))
@@ -115,6 +117,27 @@ class FileContentReader:
             pos = max(pos, hi)
         if pos < end:
             chunk.states.append((pos, end, BAD))
+
+    def _read_encrypted(self, chunk: ContentChunk, file_lo: int, file_hi: int, ext: Extent, mode: ReadMode) -> None:
+        """Read part of an encrypted extent: whole 512-byte units are read and decrypted, then the
+        wanted part is kept."""
+        from .apfs_crypto import xts_decrypt
+
+        assert self.layout.xts_key is not None
+        rel_lo = (file_lo - ext.file_offset) // 512 * 512
+        rel_hi = -(-(file_hi - ext.file_offset) // 512) * 512
+        disk = ext.disk_offset + rel_lo
+        outcome = self.reader.read(disk, rel_hi - rel_lo, mode)
+        plain = xts_decrypt(self.layout.xts_key, bytes(outcome.data), ext.tweak + rel_lo // 512)
+        cut = file_lo - (ext.file_offset + rel_lo)
+        rel = file_lo - chunk.offset
+        chunk.data[rel:rel + (file_hi - file_lo)] = plain[cut:cut + (file_hi - file_lo)]
+        shift = file_lo - disk - cut
+        for ranges, state in ((outcome.good, OK), (outcome.unread, UNREAD), (outcome.bad, BAD)):
+            for s, e in ranges:
+                lo, hi = max(s + shift, file_lo), min(e + shift, file_hi)
+                if lo < hi:
+                    chunk.states.append((lo, hi, state))
 
     def _read_disk(self, chunk: ContentChunk, file_lo: int, file_hi: int, disk: int, mode: ReadMode) -> None:
         outcome = self.reader.read(disk, file_hi - file_lo, mode)

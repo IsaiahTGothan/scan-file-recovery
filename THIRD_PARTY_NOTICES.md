@@ -37,6 +37,14 @@ IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
 OF SUCH DAMAGE.
 ```
 
+## cryptography and OpenSSL
+
+Unlocking encrypted Mac (APFS) volumes uses the Python Cryptographic Authority's `cryptography`
+package (https://github.com/pyca/cryptography), under the Apache License 2.0 or the BSD license,
+at your choice. It includes OpenSSL (https://www.openssl.org), under the Apache License 2.0
+(https://www.apache.org/licenses/LICENSE-2.0). The license files of both are inside the package
+(`cryptography-*.dist-info`) in the packaged app.
+
 ## Qt for Python (PySide6)
 
 The desktop app is built with Qt for Python (PySide6), used under the GNU Lesser General Public

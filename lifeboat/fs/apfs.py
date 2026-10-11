@@ -36,6 +36,7 @@ from ..errors import E_BOOT_BACKUP, E_FS_UNSUPPORTED, E_META_CORRUPT, E_META_UNR
 from ..events import EventBus, JobControl, Progress
 from ..rescue.reader import ReadMode, RescueReader
 from ..util import apfs_time, format_size, format_timestamp
+from .apfs_crypto import ApfsKeys, xts_decrypt
 from .applecomp import CompressionError, chunk_table, parse_decmpfs, table_bytes_needed
 from .model import INVALID, SPARSE, CompressedChunks, Extent, F, FileLayout, Node, Volume
 
@@ -78,6 +79,7 @@ MAX_SNAPSHOT_NODES = 3_000_000
 READ_RUN = 4 << 20
 
 _M32 = 0xFFFFFFFF
+Piece = tuple[int, int, int, int]       # a file extent: logical offset, length, block, crypto id
 
 
 def checksum_ok(block: bytes) -> bool:
@@ -341,13 +343,19 @@ class ApfsVolumeInfo:
     xid: int
     physical_tree: bool = False                          # the file tree's links are block numbers
     inodes: dict[int, Inode] = field(default_factory=dict)
-    extents: dict[int, list[tuple[int, int, int]]] = field(default_factory=dict)
+    extents: dict[int, list[Piece]] = field(default_factory=dict)
     tree_nodes: set[int] = field(default_factory=set)
     snapshots: list[ApfsSnapshot] = field(default_factory=list)
+    vek: bytes | None = None                             # the volume's key, once unlocked
+    hint: str = ""                                       # the password hint saved with it
 
     @property
     def encrypted(self) -> bool:
         return not self.fs_flags & FS_UNENCRYPTED
+
+    @property
+    def locked(self) -> bool:
+        return self.encrypted and self.vek is None
 
     @property
     def sealed(self) -> bool:
@@ -374,6 +382,15 @@ class ApfsVolumeInfo:
                    bytes(block[240:256]), files, xid, bool(tree_type & OBJ_PHYSICAL))
 
 
+@dataclass
+class LockedVolume:
+    """The ``ref`` of the folder standing for an encrypted volume that is still locked."""
+
+    name: str
+    hint: str
+    uuid: bytes
+
+
 class ApfsRef:
     """What a file node points at: an inode of one volume (and which of its streams)."""
 
@@ -397,9 +414,14 @@ class ApfsVolume(Volume):
         events: EventBus | None = None,
         control: JobControl | None = None,
         metadata_retry_seconds: float = 180.0,
+        passwords: list[str] | None = None,
     ) -> None:
         super().__init__(reader, superblock.start, superblock.volume_size)
         self.sb = superblock
+        self.passwords = list(passwords or [])
+        self.unlocked: list[str] = []
+        self._keys: ApfsKeys | None = None
+        self._locked_messages: dict[bytes, str] = {}
         self.block_size = superblock.block_size
         self.cluster_size = superblock.block_size
         self.events = events
@@ -570,18 +592,21 @@ class ApfsVolume(Volume):
                     holder.flags |= F.SYSTEM
                 root.add(holder)
                 self._holders[id(info)] = holder
-            if info.encrypted:
+            if info.encrypted and not self._unlock(info):
                 holder.flags |= F.UNSUPPORTED
-                self._warn(f"APFS volume '{info.name}' is encrypted (FileVault or 'APFS (Encrypted)'). Lifeboat can't "
-                           "read it without unlocking it: connect the drive to a Mac, unlock it, then make an image or "
-                           "copy the files.", E_FS_UNSUPPORTED)
+                holder.ref = LockedVolume(info.name, info.hint, info.uuid)
+                hint = f" (password hint: \"{info.hint}\")" if info.hint else ""
+                message = (f"APFS volume '{info.name}' is encrypted{hint}. Unlock it with the password used on the "
+                           "Mac: select it and click Unlock (on the command line: --password).")
+                self._locked_messages[info.uuid] = message
+                self._warn(message, E_FS_UNSUPPORTED)
                 continue
             if progress is not None:
                 progress(Progress(f"Reading APFS volume '{info.name}'"))
             self._load_volume(info, holder, progress)
         self._add_deleted(progress)
         for info in self.volumes:
-            if info.snapshots and not info.encrypted:
+            if info.snapshots and not info.locked:
                 self._add_snapshots(info, self._holders[id(info)], progress)
         if self.unreadable_nodes:
             lost = format_size(self.unreadable_nodes * self.block_size)
@@ -597,25 +622,96 @@ class ApfsVolume(Volume):
         self.root = root
         return root
 
+    def unlock(self, uuid: bytes, password: str, progress: Callable[[Progress], None] | None = None,
+               control: JobControl | None = None) -> Node | None:
+        """Unlock a volume that stayed locked during the scan and read its files into the tree, in
+        place: the rest of the scan (other volumes, what Deep Scan found, ticks) is untouched.
+        Returns the volume's folder, or None if ``password`` doesn't open it."""
+        info = next((v for v in self.volumes if v.uuid == uuid and v.locked), None)
+        if info is None:
+            return None
+        if control is not None:
+            self.control = control
+        self._deadline = time.monotonic() + self.metadata_retry_seconds
+        self.passwords = [password]
+        if not self._unlock(info):
+            return None
+        holder = self._holders[id(info)]
+        locked_ref, locked_flags = holder.ref, holder.flags
+        holder.flags &= ~F.UNSUPPORTED
+        holder.ref = None
+        unreadable, damaged = self.unreadable_nodes, self.damaged_nodes
+        try:
+            if progress is not None:
+                progress(Progress(f"Reading APFS volume '{info.name}'"))
+            self._load_volume(info, holder, progress)
+            self._used_blocks = None             # its files' blocks are in use: the overwritten check must know
+            self._add_deleted(progress, only={info.uuid})
+            if info.snapshots:
+                self._add_snapshots(info, holder, progress)
+        except BaseException:
+            # Stopped (or the drive went away) half way: back to locked, as if nothing happened.
+            holder.children = []
+            holder.flags, holder.ref = locked_flags, locked_ref
+            info.vek, info.inodes, info.extents, info.tree_nodes, info.snapshots = None, {}, {}, set(), []
+            self._used_blocks = None
+            raise
+        message = self._locked_messages.pop(info.uuid, None)
+        if message in self.warnings:
+            self.warnings.remove(message)
+        if holder.flags & F.SYSTEM:
+            for item in holder.walk():
+                item.flags |= F.SYSTEM
+        if self.unreadable_nodes > unreadable:
+            count = self.unreadable_nodes - unreadable
+            self._warn(f"{count:,} metadata blocks of '{info.name}' ({format_size(count * self.block_size)}) are "
+                       "unreadable; files they described may be missing.", E_META_UNREADABLE)
+        if self.damaged_nodes > damaged:
+            self._warn(f"{self.damaged_nodes - damaged:,} metadata blocks of '{info.name}' failed their checksum "
+                       "and were skipped.", E_META_CORRUPT)
+        return holder
+
+    def _unlock(self, info: ApfsVolumeInfo) -> bool:
+        """Try the passwords given for this scan on an encrypted volume; keep its key if one fits."""
+        from .apfs_crypto import CryptoUnavailable
+
+        try:
+            if self._keys is None:
+                self._keys = ApfsKeys(self.reader, self.offset, self.block_size, self.sb.uuid, self.sb.keylocker)
+            keys = self._keys
+            info.hint = keys.hint(info.uuid)
+            for password in self.passwords:
+                self._check()
+                info.vek = keys.unlock(info.uuid, password)
+                if info.vek is not None:
+                    self.unlocked.append(info.name)
+                    if self.events is not None:
+                        self.events.success(f"APFS volume '{info.name}' unlocked.", source="apfs")
+                    return True
+        except CryptoUnavailable as exc:
+            self._warn(str(exc), E_FS_UNSUPPORTED)
+        return False
+
     def _tree_leaves(self, omap: dict[int, list[tuple[int, int, int]]], root_oid: int, xid: int,
                      skip: set[int] | None = None, visited: set[int] | None = None,
                      progress: Callable[[Progress], None] | None = None,
                      cache: dict[int, list[tuple[bytes, bytes]]] | None = None,
-                     physical: bool = False) -> list[list[tuple[bytes, bytes]]]:
+                     physical: bool = False, key: bytes | None = None) -> list[list[tuple[bytes, bytes]]]:
         """All leaf records of a file-system tree, reading level by level. Its links are object ids
         found through ``omap`` (or, for ``physical`` trees, block numbers). Nodes whose block is in
         ``skip`` are not read (shared with a tree already loaded); parsed leaves are kept in
-        ``cache`` (snapshots share most of their nodes)."""
+        ``cache`` (snapshots share most of their nodes). Encrypted nodes are decrypted with ``key``
+        (an unlocked volume's key) or left out without it."""
         cache = cache if cache is not None else {}
+        sectors = self.block_size // 512
 
         def locate(oid: int) -> tuple[int, int] | None:
             return (oid, 0) if physical else self._resolve(omap, oid, xid)
 
         found = locate(root_oid)
-        if found is None:
+        if found is None or (found[1] & OMAP_VAL_ENCRYPTED and key is None):
             return []
-        if found[1] & OMAP_VAL_ENCRYPTED:
-            return []
+        encrypted: set[int] = {found[0]} if found[1] & OMAP_VAL_ENCRYPTED else set()
         level_blocks = [found[0]]
         leaves: list[list[tuple[bytes, bytes]]] = []
         depth = 0
@@ -634,6 +730,8 @@ class ApfsVolume(Volume):
                 block = blocks.get(p)
                 if block is None:
                     continue
+                if p in encrypted and key is not None:
+                    block = xts_decrypt(key, block, p * sectors)
                 _oid, bxid, otype, _sub = object_header(block)
                 if otype not in (T_BTREE, T_BTREE_NODE) or bxid > xid or not checksum_ok(block):
                     self.damaged_nodes += 1
@@ -652,8 +750,11 @@ class ApfsVolume(Volume):
                     if len(value) < 8:
                         continue
                     child = locate(struct.unpack_from("<Q", value, 0)[0])
-                    if child is not None and not child[1] & OMAP_VAL_ENCRYPTED:
-                        next_level.append(child[0])
+                    if child is None or (child[1] & OMAP_VAL_ENCRYPTED and key is None):
+                        continue
+                    if child[1] & OMAP_VAL_ENCRYPTED:
+                        encrypted.add(child[0])
+                    next_level.append(child[0])
             if progress is not None:
                 progress(Progress("Reading the APFS file tree", len(leaves), 0, item=f"{len(leaves):,} tree nodes"))
             level_blocks = next_level
@@ -681,11 +782,12 @@ class ApfsVolume(Volume):
         return leaves
 
     def _records(self, leaves: list[list[tuple[bytes, bytes]]]
-                 ) -> tuple[dict[int, Inode], list[tuple[int, str, int, int]], dict[int, list[tuple[int, int, int]]]]:
-        """Inodes, folder entries (parent, name, file id, type) and file extents of a tree."""
+                 ) -> tuple[dict[int, Inode], list[tuple[int, str, int, int]], dict[int, list[Piece]]]:
+        """Inodes, folder entries (parent, name, file id, type) and file extents (logical offset,
+        length, block, crypto id) of a tree."""
         inodes: dict[int, Inode] = {}
         drecs: list[tuple[int, str, int, int]] = []
-        extents: dict[int, list[tuple[int, int, int]]] = {}
+        extents: dict[int, list[Piece]] = {}
         xattrs: list[tuple[int, str, int, bytes]] = []
         for entries in leaves:
             for key, value in entries:
@@ -702,10 +804,10 @@ class ApfsVolume(Volume):
                     drec = parse_drec(key, value)
                     if drec is not None:
                         drecs.append((oid, drec[0], drec[1], drec[2]))
-                elif kind == R_FILE_EXTENT and len(key) >= 16 and len(value) >= 16:
+                elif kind == R_FILE_EXTENT and len(key) >= 16 and len(value) >= 24:
                     logical = struct.unpack_from("<Q", key, 8)[0]
-                    length_flags, phys = struct.unpack_from("<QQ", value, 0)
-                    extents.setdefault(oid, []).append((logical, length_flags & ((1 << 56) - 1), phys))
+                    length_flags, phys, crypto = struct.unpack_from("<QQQ", value, 0)
+                    extents.setdefault(oid, []).append((logical, length_flags & ((1 << 56) - 1), phys, crypto))
                 elif kind == R_XATTR and len(key) >= 10 and len(value) >= 4:
                     name_len = struct.unpack_from("<H", key, 8)[0]
                     name = key[10:10 + name_len].split(b"\0", 1)[0].decode("utf-8", "replace")
@@ -725,7 +827,7 @@ class ApfsVolume(Volume):
     def _load_volume(self, info: ApfsVolumeInfo, holder: Node, progress: Callable[[Progress], None] | None) -> None:
         omap = self._omap(info.omap)
         leaves = self._tree_leaves(omap, info.root_tree, info.xid, visited=info.tree_nodes, progress=progress,
-                                   physical=info.physical_tree)
+                                   physical=info.physical_tree, key=info.vek)
         inodes, drecs, extents = self._records(leaves)
         if info.sealed and info.fext_tree:
             for entries in self._physical_leaves(info.fext_tree):
@@ -733,7 +835,7 @@ class ApfsVolume(Volume):
                     if len(key) >= 16 and len(value) >= 16:
                         private_id, logical = struct.unpack_from("<QQ", key, 0)
                         length_flags, phys = struct.unpack_from("<QQ", value, 0)
-                        extents.setdefault(private_id, []).append((logical, length_flags & ((1 << 56) - 1), phys))
+                        extents.setdefault(private_id, []).append((logical, length_flags & ((1 << 56) - 1), phys, 0))
             for items in extents.values():
                 items.sort()
         info.inodes = inodes
@@ -829,7 +931,7 @@ class ApfsVolume(Volume):
             size = len(target[1].rstrip(b"\0")) if target else 0
         if inode.nlink > 1:
             flags |= F.HARDLINK
-        if any(phys == 0 for _l, _n, phys in info.extents.get(inode.private_id, ())):
+        if any(piece[2] == 0 for piece in info.extents.get(inode.private_id, ())):
             flags |= F.SPARSE
         node = Node(name, flags, size, volume=self, ref=ApfsRef(info, inode), ctime=inode.ctime, mtime=inode.mtime,
                     atime=inode.atime)
@@ -848,8 +950,9 @@ class ApfsVolume(Volume):
         return node
 
     # --------------------------------------------------------------- deleted
-    def _add_deleted(self, progress: Callable[[Progress], None] | None) -> None:
-        """Files in older checkpoints that the newest one no longer has."""
+    def _add_deleted(self, progress: Callable[[Progress], None] | None, only: set[bytes] | None = None) -> None:
+        """Files in older checkpoints that the newest one no longer has (in the volumes whose UUID is
+        in ``only``, or all)."""
         sb = self.sb
         older = []
         area_start = self.offset + sb.desc_base * self.block_size
@@ -864,10 +967,10 @@ class ApfsVolume(Volume):
             return
         if progress is not None:
             progress(Progress("Looking for deleted files in older checkpoints"))
-        by_uuid = {v.uuid: v for v in self.volumes if not v.encrypted}
+        by_uuid = {v.uuid: v for v in self.volumes if not v.locked and (only is None or v.uuid in only)}
         found_inodes: dict[bytes, dict[int, Inode]] = {}
         found_drecs: dict[bytes, list[tuple[int, str, int, int]]] = {}
-        found_extents: dict[bytes, dict[int, list[tuple[int, int, int]]]] = {}
+        found_extents: dict[bytes, dict[int, list[Piece]]] = {}
         for old in older:
             self._check()
             container_omap = self._omap(old.omap_oid)
@@ -879,7 +982,7 @@ class ApfsVolume(Volume):
                 if vol is None or current is None:
                     continue
                 leaves = self._tree_leaves(self._omap(vol.omap), vol.root_tree, old.xid, skip=current.tree_nodes,
-                                           physical=vol.physical_tree)
+                                           physical=vol.physical_tree, key=current.vek)
                 inodes, drecs, extents = self._records(leaves)
                 into = found_inodes.setdefault(vol.uuid, {})
                 for ino, inode in inodes.items():
@@ -894,7 +997,7 @@ class ApfsVolume(Volume):
             self._attach_deleted(by_uuid[uuid], inodes, found_drecs.get(uuid, []), found_extents.get(uuid, {}))
 
     def _attach_deleted(self, info: ApfsVolumeInfo, inodes: dict[int, Inode], drecs: list[tuple[int, str, int, int]],
-                        extents: dict[int, list[tuple[int, int, int]]]) -> int:
+                        extents: dict[int, list[Piece]]) -> int:
         """Show deleted files (inodes the live tree no longer has) in their folders; return how many."""
         inodes = {ino: inode for ino, inode in inodes.items() if ino not in info.inodes and ino >= FIRST_USER_ID}
         if not inodes:
@@ -941,7 +1044,7 @@ class ApfsVolume(Volume):
             for info in self.volumes:
                 for private_id, items in info.extents.items():
                     if private_id in live_ids:
-                        spans.extend((phys, phys + max(1, -(-length // bs))) for _l, length, phys in items if phys)
+                        spans.extend((phys, phys + max(1, -(-length // bs))) for _l, length, phys, _c in items if phys)
             spans.sort()
             merged: list[tuple[int, int]] = []
             for start, end in spans:
@@ -951,7 +1054,7 @@ class ApfsVolume(Volume):
                     merged.append((start, end))
             self._used_blocks = merged
             self._used_starts = [start for start, _end in merged]
-        for _logical, length, phys in ref.volume.extents.get(ref.inode.private_id, ()):
+        for _logical, length, phys, _crypto in ref.volume.extents.get(ref.inode.private_id, ()):
             if not phys:
                 continue
             end = phys + max(1, -(-length // bs))
@@ -998,7 +1101,7 @@ class ApfsVolume(Volume):
     def deep_finish(self, progress: Callable[[Progress], None] | None = None) -> int:
         """After Deep Scan: rebuild the deleted files the old nodes describe. Returns how many."""
         orphans = getattr(self, "_orphans", [])
-        readable = [v for v in self.volumes if not v.encrypted]
+        readable = [v for v in self.volumes if not v.encrypted]   # encrypted nodes can't be recognised
         if not orphans or len(readable) != 1:
             return 0
         if progress is not None:
@@ -1006,7 +1109,7 @@ class ApfsVolume(Volume):
         info = readable[0]
         inodes: dict[int, Inode] = {}
         drecs: set[tuple[int, str, int, int]] = set()
-        pieces: dict[tuple[int, int], tuple[int, int]] = {}
+        pieces: dict[tuple[int, int], tuple[int, int, int]] = {}
         for _xid, entries in sorted(orphans, key=lambda item: item[0]):
             found_inodes, found_drecs, found_extents = self._records([entries])
             for ino, inode in found_inodes.items():
@@ -1014,11 +1117,11 @@ class ApfsVolume(Volume):
                     inodes[ino] = inode
             drecs.update(found_drecs)
             for private_id, items in found_extents.items():
-                for logical, length, phys in items:
-                    pieces[(private_id, logical)] = (length, phys)
-        extents: dict[int, list[tuple[int, int, int]]] = {}
-        for (private_id, logical), (length, phys) in sorted(pieces.items()):
-            extents.setdefault(private_id, []).append((logical, length, phys))
+                for logical, length, phys, crypto in items:
+                    pieces[(private_id, logical)] = (length, phys, crypto)
+        extents: dict[int, list[Piece]] = {}
+        for (private_id, logical), (length, phys, crypto) in sorted(pieces.items()):
+            extents.setdefault(private_id, []).append((logical, length, phys, crypto))
         self._orphans = []
         return self._attach_deleted(info, inodes, sorted(drecs), extents)
 
@@ -1061,11 +1164,12 @@ class ApfsVolume(Volume):
                 continue
             if progress is not None:
                 progress(Progress(f"Reading snapshot '{snap.name}'"))
-            leaves = self._tree_leaves(omap, vol.root_tree, snap.xid, cache=cache, physical=vol.physical_tree)
+            leaves = self._tree_leaves(omap, vol.root_tree, snap.xid, cache=cache, physical=vol.physical_tree,
+                                       key=info.vek)
             inodes, drecs, extents = self._records(leaves)
             view = ApfsVolumeInfo(vol.index, vol.name, vol.role, info.omap, vol.root_tree, 0, 0, vol.fs_flags,
                                   vol.incompatible, vol.uuid, vol.files, snap.xid, vol.physical_tree,
-                                  inodes=inodes, extents=extents)
+                                  inodes=inodes, extents=extents, vek=info.vek)
             self._build(view, node, inodes, drecs, deleted=False)
             budget -= len(inodes)
             shown += 1
@@ -1097,8 +1201,9 @@ class ApfsVolume(Volume):
         return self._extent_layout(info, stream_id, size)
 
     def _extent_layout(self, info: ApfsVolumeInfo, private_id: int, size: int) -> FileLayout:
-        layout = FileLayout(size)
-        for logical, length, phys in info.extents.get(private_id, ()):
+        layout = FileLayout(size, xts_key=info.vek)
+        sectors = self.block_size // 512
+        for logical, length, phys, crypto in info.extents.get(private_id, ()):
             if logical >= size:
                 break
             length = min(length, size - logical)
@@ -1108,7 +1213,9 @@ class ApfsVolume(Volume):
                 layout.extents.append(Extent(logical, length, INVALID))
                 layout.problems.append("Part of this file points outside the container.")
             else:
-                layout.extents.append(Extent(logical, length, self.block_offset(phys)))
+                # The crypto id is the block the extent was first written to (its tweak, in blocks).
+                tweak = (crypto or phys) * sectors if info.vek is not None else -1
+                layout.extents.append(Extent(logical, length, self.block_offset(phys), tweak))
         covered = sum(e.length for e in layout.extents)
         if covered < size and size:
             layout.problems.append("The location of part of this file is unknown.")

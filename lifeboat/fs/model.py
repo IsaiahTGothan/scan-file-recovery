@@ -147,6 +147,7 @@ class Extent:
     file_offset: int
     length: int
     disk_offset: int
+    tweak: int = -1          # encrypted APFS: the AES-XTS tweak of the extent's first 512 bytes
 
     @property
     def file_end(self) -> int:
@@ -191,6 +192,7 @@ class FileLayout:
     chunked: CompressedChunks | None = None
     problems: list[str] = field(default_factory=list)
     unsupported: str | None = None
+    xts_key: bytes | None = None     # encrypted APFS: the extents' data is AES-XTS encrypted
 
     def disk_ranges(self) -> list[tuple[int, int]]:
         """Absolute device ranges holding the file's data (sorted, merged)."""

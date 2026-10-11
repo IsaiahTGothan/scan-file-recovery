@@ -49,6 +49,7 @@ from ..device.image import ImageDevice
 from ..elevate import can_elevate
 from ..errors import LifeboatError, describe
 from ..events import Event, EventBus, Level, Progress
+from ..fs.apfs import ApfsVolume, LockedVolume
 from ..fs.content import OK, FileContentReader
 from ..fs.model import F, FileLayout, Node
 from ..imaging import ImagingJob, ImagingOptions, ImagingSummary
@@ -69,6 +70,7 @@ from .dialogs import (
     ImageDialog,
     RecoverDialog,
     SummaryDialog,
+    UnlockDialog,
     apply_appearance,
     pref,
     pref_float,
@@ -106,8 +108,8 @@ from .widgets import (
 
 log = logging.getLogger("lifeboat.ui")
 FOUR_GB = (4 << 30) - 1
-LONG_JOBS = ("scan", "deep", "recover", "image")  # jobs that can take hours
-JOB_ICONS = {"scan": "search", "deep": "radar", "recover": "recover", "image": "clone"}
+LONG_JOBS = ("scan", "deep", "recover", "image", "unlock")  # jobs that can take hours
+JOB_ICONS = {"scan": "search", "deep": "radar", "recover": "recover", "image": "clone", "unlock": "lock"}
 _RANK = {Status.OK: 3, Status.PARTIAL: 2, Status.FAILED: 1}  # a later run never "forgets" an earlier success
 
 
@@ -156,6 +158,8 @@ class MainWindow(QMainWindow):
         self._pending_tick: tuple[str, object, list[Node]] | None = None  # waits for the positions
         self._recover_after_tick = False           # "Tick only what fits" from the Recover dialog
         self._remaining: list[Node] = []           # files being split across drives: what's left is offered
+        self.passwords: list[str] = []             # encrypted Mac volumes' passwords: memory only, this session
+        self._unlock_retry: Node | None = None     # asked again after a wrong password
         self._toast_mode = str(pref("toasts"))
         self._build()
         self._connect()
@@ -670,6 +674,7 @@ class MainWindow(QMainWindow):
         self.list.selectionModel().currentChanged.connect(self._list_current)
         self.list.customContextMenuRequested.connect(self._list_menu)
         self.preview.preview_requested.connect(self.preview_node)
+        self.preview.unlock_requested.connect(self.unlock_volume)
         self.search.returnPressed.connect(self._apply_filter)
         self.search.textChanged.connect(self._search_edited)
         self.category.changed.connect(self._category_changed)
@@ -986,9 +991,9 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 0)
         if kind in LONG_JOBS:
             self.job_panel.start(label, JOB_ICONS[kind])
-        self.btn_pause.setVisible(kind in ("scan", "deep", "recover", "image"))
+        self.btn_pause.setVisible(kind in LONG_JOBS)
         self.btn_pause.setText("Pause")
-        self.btn_stop.setVisible(kind in ("scan", "deep", "recover", "image", "order"))
+        self.btn_stop.setVisible(kind in (*LONG_JOBS, "order"))
         self.btn_finish.setVisible(False)
         self._update_actions()
         job.start()
@@ -1033,6 +1038,7 @@ class MainWindow(QMainWindow):
             return
         text = {"recover": "Stop the recovery? Files already recovered are kept and listed in the report.",
                 "image": "Stop imaging? Everything copied so far is kept; you can continue later.",
+                "unlock": "Stop reading the encrypted volume? It stays locked; you can unlock it again later.",
                 }.get(self.job.kind, "Stop the current scan?")
         yes, no = QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No
         if QMessageBox.question(self, "Stop", text, yes | no, no) == yes and self.job is not None:
@@ -1051,7 +1057,7 @@ class MainWindow(QMainWindow):
             return
         reader, info = self.reader, self.info
         self._detach_tree()
-        options = ScanOptions(metadata_retry_seconds=pref_float("metadata_retry"))
+        options = ScanOptions(metadata_retry_seconds=pref_float("metadata_retry"), passwords=list(self.passwords))
 
         def work(job: Job) -> ScanResult:
             scanner = Scanner(reader, info, self.bus, job.control, job.report, job.handler, options)
@@ -1073,7 +1079,8 @@ class MainWindow(QMainWindow):
         self._detach_tree()
         options = ScanOptions(find_partitions=values["find_partitions"], carve=values["carve"],
                               carve_groups=values["groups"],
-                              metadata_retry_seconds=pref_float("metadata_retry"))
+                              metadata_retry_seconds=pref_float("metadata_retry"),
+                              passwords=list(self.passwords))
 
         def work(job: Job) -> ScanResult:
             scanner = Scanner(reader, info, self.bus, job.control, job.report, job.handler, options)
@@ -1087,25 +1094,89 @@ class MainWindow(QMainWindow):
         self.list_model.set_folder(None)
         self.preview.show_node(None)
 
-    def _show_result(self, result: ScanResult) -> None:
+    def _show_result(self, result: ScanResult, keep_ticks: bool = False, focus: Node | None = None) -> None:
+        """Show a scan's tree (``keep_ticks``: the same scan again, ticks kept); select ``focus``, else the
+        first locked volume, else the first volume."""
         if result is not self.result:
             self._positions = {}
             self.list_model.results.clear()
         self.result = result
-        self.selection.set_root(result.root)
+        self.selection.set_root(result.root, keep_ticks)
         self.folder_model.set_root(result.root)
         self.pages.setCurrentIndex(2)
         files, deleted, size = result.counts()
         self.category.set_counts(self._category_counts(result.root))
         vols = [v for v in result.volumes if v.volume is not None]
+        locked = self._locked_volumes(result)
+        lock_note = (f" {len(locked)} encrypted volume{'s are' if len(locked) != 1 else ' is'} locked: select it and "
+                     "click Unlock." if locked else "")
         self.found_label.setText(
             f"{files:,} files found ({deleted:,} deleted or found by signature), {format_size(size)} in "
-            f"{len(vols)} volume(s).")
-        if self.folder_model.rowCount() > 0:
-            first = self.folder_model.index(0, 0)
-            self.tree.setCurrentIndex(first)
-            self.tree.expand(first)
+            f"{len(vols)} volume(s).{lock_note}")
+        target = focus or (locked[0] if locked else None)
+        index = self.folder_model.index_of(target) if target is not None else QModelIndex()
+        if not index.isValid() and self.folder_model.rowCount() > 0:
+            index = self.folder_model.index(0, 0)
+        if index.isValid():
+            self.tree.setCurrentIndex(index)
+            self.tree.expand(index)
+            self.tree.scrollTo(index)
         self._apply_filter()
+
+    @staticmethod
+    def _locked_volumes(result: ScanResult) -> list[Node]:
+        """The folders standing for encrypted volumes that are still locked."""
+        out = []
+        for vr in result.volumes:
+            if vr.root is None:
+                continue
+            for node in (vr.root, *(vr.root.children or ())):
+                if isinstance(node.ref, LockedVolume):
+                    out.append(node)
+        return out
+
+    def unlock_volume(self, node: Node, error: str = "") -> None:
+        """Ask for an encrypted volume's password, then read its files into the scan (in place)."""
+        locked, volume, result = node.ref, node.volume, self.result
+        if not isinstance(locked, LockedVolume) or not isinstance(volume, ApfsVolume) or result is None:
+            return
+        if self.job is not None:
+            self.toasts.show("warning", "A job is running", "Wait for it to finish, then unlock the volume.")
+            return
+        dialog = UnlockDialog(self, locked.name or node.name, locked.hint, error)
+        accepted = dialog.exec() == dialog.DialogCode.Accepted
+        password = dialog.password()
+        dialog.deleteLater()
+        if not accepted or not password:
+            return
+        # The volume's folder fills up on the job's thread: nothing may look at the tree meanwhile.
+        self._detach_tree()
+        self.selection.set_root(None)
+
+        def work(job: Job) -> tuple[Node, Node | None, str]:
+            return node, volume.unlock(locked.uuid, password, job.report, job.control), password
+
+        self._start("unlock", f"Unlocking {locked.name or node.name}\u2026", work)
+
+    def _unlock_done(self, node: Node, holder: Node | None, password: str) -> None:
+        assert self.result is not None
+        self._show_result(self.result, keep_ticks=True, focus=node)
+        name = node.name
+        if holder is None:
+            self._notify("warning", "Wrong password", f"That password doesn't open \u201c{name}\u201d.")
+            self._unlock_retry = node
+            QTimer.singleShot(0, self._retry_unlock)
+            return
+        if password not in self.passwords:
+            self.passwords.append(password)   # a later scan of this drive unlocks it by itself
+        files = sum(1 for n in holder.walk() if n.children is None)
+        self._notify("success", "Volume unlocked", f"\u201c{name}\u201d: {files:,} files.")
+
+    def _retry_unlock(self) -> None:
+        node, self._unlock_retry = self._unlock_retry, None
+        if node is not None:
+            self.unlock_volume(node, "That password doesn't open this volume. Check the hint, the keyboard layout "
+                                     "and Caps Lock, then try again.")
 
     @staticmethod
     def _category_counts(root: Node) -> dict[str, tuple[int, int]]:
@@ -1254,6 +1325,9 @@ class MainWindow(QMainWindow):
             self._show_result(result)
             files, deleted, _size = result.counts()
             self._notify("success", "Scan finished", f"{files:,} files found, {deleted:,} of them deleted.")
+        elif kind == "unlock":
+            assert isinstance(result, tuple)
+            self._unlock_done(*result)
         elif kind == "recover":
             assert isinstance(result, RecoverySummary)
             self._recovery_done(result)
@@ -1288,8 +1362,8 @@ class MainWindow(QMainWindow):
         if kind == "order":
             self._pending_tick = None
             self._recover_after_tick = False
-        if kind in ("scan", "deep") and self.result is not None:
-            self._show_result(self.result)
+        if kind in ("scan", "deep", "unlock") and self.result is not None:
+            self._show_result(self.result, keep_ticks=True)
         self.bus.critical(f"The {kind} stopped because of an unexpected error: {message}", code="LB-500")
         self._notify("critical", "Something went wrong", message)
         self._show_error("Unexpected error", message, details, describe("LB-500").hint)
@@ -1299,9 +1373,9 @@ class MainWindow(QMainWindow):
         if kind == "order":
             self._pending_tick = None
             self._recover_after_tick = False
-        if kind in ("scan", "deep"):
+        if kind in ("scan", "deep", "unlock"):
             if self.result is not None:
-                self._show_result(self.result)
+                self._show_result(self.result, keep_ticks=True)
             else:
                 self.pages.setCurrentIndex(1)
         self.toasts.show("info", "Stopped", "The job was stopped.")
@@ -1522,6 +1596,9 @@ class MainWindow(QMainWindow):
     def _list_activated(self, index: QModelIndex) -> None:
         node = self.list_model.node(index)
         if node is None:
+            return
+        if isinstance(node.ref, LockedVolume):
+            self.unlock_volume(node)
             return
         if node.children is not None:
             index = self.folder_model.index_of(node)
@@ -1789,7 +1866,7 @@ class MainWindow(QMainWindow):
             view.verticalHeader().setDefaultSectionSize(height)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if self.job is not None and self.job.kind in ("scan", "deep", "recover", "image"):
+        if self.job is not None and self.job.kind in LONG_JOBS:
             yes, no = QMessageBox.StandardButton.Yes, QMessageBox.StandardButton.No
             answer = QMessageBox.question(
                 self, "Quit Lifeboat",

@@ -92,6 +92,7 @@ class ScanOptions:
     carve: bool = True
     carve_groups: set[str] | None = None
     metadata_retry_seconds: float = 180.0
+    passwords: list[str] = field(default_factory=list)   # tried on encrypted (APFS) volumes
 
 
 ProgressFn = Callable[[Progress], None]
@@ -133,7 +134,7 @@ class Scanner:
         found = result.probe
         try:
             vol = mount(self.reader, result.offset, found, self.events, self.control,
-                        self.options.metadata_retry_seconds)
+                        self.options.metadata_retry_seconds, self.options.passwords)
             if vol is None:
                 return
             root = vol.load(self.progress)  # type: ignore[attr-defined]

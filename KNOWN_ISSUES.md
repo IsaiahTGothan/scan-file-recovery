@@ -34,13 +34,14 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 - Not yet tested on a physically failing drive. Tested only with simulated failures and healthy real disks.
 - The Mac version is tested on GitHub's Macs (Apple Silicon and Intel) with disk images that macOS itself formats and attaches as disks, not yet on a person's Mac with a USB drive. Its drive list doesn't read serial numbers yet, so a reconnected drive is recognised by its name and size.
 - Can't browse ext2/3/4 or ReFS (signature search still works on them).
-- Encrypted APFS volumes (FileVault, "APFS (Encrypted)", encrypted Time Machine backups) are detected but can't be read: unlock the drive on a Mac first. A Mac's internal SSD (T2 and Apple silicon) can only be read by that Mac.
+- A Mac's internal SSD (T2 and Apple silicon) is encrypted by the Mac's own chip and can only be read by that Mac. Encrypted APFS volumes unlock with their password; Deep Scan can't find deleted files inside an encrypted volume (their old file-tree pages are encrypted too).
 - APFS snapshots (each Time Machine backup on an APFS disk is one) are read as Apple documents them, but no real Time Machine disk has been tested yet: macOS doesn't let a script make snapshots of a test disk.
 - On HFS+ without a journal (rare; journaling is the default), deleted files can only be found by signature, without names.
 - Windows EFS-encrypted files can't be decrypted. Windows system files compressed with CompactOS (WOF) are skipped.
 - Physical damage (clicking, not spinning up, not detected) needs a clean-room lab.
 
 ## Fixed on October 11, 2026 (version 1.2.0)
+- **Encrypted Mac volumes couldn't be read.** FileVault, "APFS (Encrypted)" and encrypted Time Machine volumes now unlock with their password (**Unlock** in the details pane, `--password` on the command line). Lifeboat decrypts them itself (AES-XTS, as Apple documents it), on Windows too; the password is kept in memory only. Unlocking reads only that volume, so what a Deep Scan found and the files already ticked stay. Tested on an encrypted volume made by macOS: a wrong password is refused and the right one gives every file byte for byte.
 - **4. Mac drives (HFS+, APFS) couldn't be browsed.** Lifeboat now reads HFS+ (Mac OS Extended, journaled and case-sensitive) and APFS, on GPT, Apple Partition Map or unpartitioned drives: names, folders and dates, files macOS compressed, hard links, Time Machine folder links, sparse and cloned files, every volume of an APFS container. Deleted files come back with their names: on HFS+ from the journal and unused catalog nodes, on APFS from older checkpoints and, with Deep Scan, from the old file-tree pages APFS leaves in free space. A drive unplugged without ejecting has its unfinished HFS+ journal applied in memory (never on the drive), and damaged volume headers and superblocks fall back to their copies. Tested on real disks made by macOS: every file byte for byte, and every deleted file either recovered exactly or flagged as overwritten.
 
 ## Fixed on October 11, 2026 (version 1.1.0)

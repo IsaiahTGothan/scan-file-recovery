@@ -7,9 +7,7 @@ whatever content they come back with must be either exact or flagged as overwrit
 
 from __future__ import annotations
 
-import gzip
 import hashlib
-import json
 import shutil
 import unicodedata
 from pathlib import Path
@@ -24,21 +22,8 @@ from lifeboat.rescue.reader import ReadMode, ReadPolicy, RescueReader
 from lifeboat.scan import Scanner
 from lifeboat.scan.scanner import ScanResult
 
-FIXTURES = Path(__file__).parent / "fixtures" / "apple"
 HFS = ["hfsplus", "hfsx_apm", "hfsplus_bare"]
-
-
-@pytest.fixture(scope="module")
-def disks(tmp_path_factory) -> dict[str, tuple[Path, dict]]:
-    out = {}
-    folder = tmp_path_factory.mktemp("apple")
-    for gz in sorted(FIXTURES.glob("*.img.gz")):
-        name = gz.name[:-len(".img.gz")]
-        image = folder / f"{name}.img"
-        with gzip.open(gz, "rb") as src, open(image, "wb") as dst:
-            shutil.copyfileobj(src, dst, 1 << 20)
-        out[name] = (image, json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8")))
-    return out
+# The disks themselves: the ``disks`` fixture (conftest.py) unpacks tests/fixtures/apple.
 
 
 def _scan(image: Path) -> tuple[ScanResult, RescueReader, list[str]]:
@@ -280,3 +265,83 @@ def test_apfs_snapshot_view(disks, monkeypatch):
         assert complete and hashlib.sha256(data).hexdigest() == item["sha256"], item["path"]
         checked += 1
     assert checked > 400
+
+
+def test_apfs_encrypted_volume_unlocks_with_its_password(disks):
+    """The encrypted volume macOS made opens with its password (and only with it): its file comes
+    back byte for byte, decrypted."""
+    if "apfs_locked" not in disks:
+        pytest.skip("test disk not made yet")
+    pytest.importorskip("cryptography")
+    from lifeboat.fs.apfs import LockedVolume
+    from lifeboat.scan.scanner import ScanOptions
+
+    image, manifest = disks["apfs_locked"]
+    secret = manifest["disk"].get("encrypted_volume")
+    if not isinstance(secret, dict):
+        pytest.skip("macOS didn't make the encrypted volume")
+    device = ImageDevice(str(image))
+    reader = RescueReader(device, ReadPolicy(timeout=5))
+    wrong = Scanner(reader, device.info, options=ScanOptions(passwords=["not the password"])).quick_scan()
+    locked = next(n for n in wrong.root.walk() if n.name.startswith("LBLocked"))
+    assert locked.flags & F.UNSUPPORTED and isinstance(locked.ref, LockedVolume)
+    right = Scanner(reader, device.info, options=ScanOptions(passwords=["nope", secret["password"]])).quick_scan()
+    node = next(n for n in right.root.walk() if n.name == secret["file"])
+    data, complete = _content(right, reader, node)
+    assert complete and hashlib.sha256(data).hexdigest() == secret["sha256"]
+    opened = next(n for n in right.root.walk() if n.name.startswith("LBLocked"))
+    assert not opened.flags & F.UNSUPPORTED
+
+
+def test_apfs_unlock_after_the_scan_fills_the_volume_in_place(disks):
+    """Unlocking after the scan (what the Unlock button does) reads only that volume into the tree:
+    the open volume's nodes and their ticks stay as they were; a wrong password changes nothing; a
+    stop half way leaves the volume locked."""
+    if "apfs_locked" not in disks:
+        pytest.skip("test disk not made yet")
+    pytest.importorskip("cryptography")
+    from lifeboat.errors import Cancelled
+    from lifeboat.events import JobControl
+    from lifeboat.fs.apfs import ApfsVolume, LockedVolume
+
+    image, manifest = disks["apfs_locked"]
+    secret = manifest["disk"].get("encrypted_volume")
+    if not isinstance(secret, dict):
+        pytest.skip("macOS didn't make the encrypted volume")
+    result, reader, _messages = _scan(image)
+    locked = next(n for n in result.root.walk() if n.name.startswith("LBLocked"))
+    assert isinstance(locked.ref, LockedVolume) and isinstance(locked.volume, ApfsVolume)
+    volume, uuid = locked.volume, locked.ref.uuid
+    opened = next(n for n in result.root.walk() if n.name.startswith("LBOPEN"))
+    before = [id(n) for n in opened.walk()]
+    readme = next(n for n in opened.walk() if n.name == "readme.txt")
+    readme.check = 2
+
+    assert volume.unlock(uuid, "not the password") is None
+    assert isinstance(locked.ref, LockedVolume) and not locked.children
+
+    class StopWhileReading(JobControl):
+        """Stops at the second check: after the password was accepted, while the files are read."""
+
+        checks = 0
+
+        def check(self) -> None:
+            self.checks += 1
+            if self.checks == 2:
+                self.cancel()
+            super().check()
+
+    stopping = StopWhileReading()
+    with pytest.raises(Cancelled):
+        volume.unlock(uuid, secret["password"], control=stopping)
+    assert stopping.checks >= 2
+    assert isinstance(locked.ref, LockedVolume) and locked.flags & F.UNSUPPORTED and not locked.children
+
+    holder = volume.unlock(uuid, secret["password"], control=JobControl())
+    assert holder is locked and locked.ref is None and not locked.flags & F.UNSUPPORTED
+    node = next(n for n in locked.walk() if n.name == secret["file"])
+    data, complete = _content(result, reader, node)
+    assert complete and hashlib.sha256(data).hexdigest() == secret["sha256"]
+    assert [id(n) for n in opened.walk()] == before and readme.check == 2
+    assert not any("is encrypted" in w for w in volume.warnings)
+    assert volume.unlock(uuid, secret["password"]) is None      # already open: nothing to do

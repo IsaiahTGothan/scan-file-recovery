@@ -5,6 +5,8 @@
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import copy_metadata
+
 ROOT = Path(SPECPATH).parent  # noqa: F821 - provided by PyInstaller
 sys.path.insert(0, str(ROOT))
 from lifeboat import __version__  # noqa: E402
@@ -40,12 +42,17 @@ EXCLUDES = [
     "PySide6.QtUiTools", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtMultimedia",
     "PySide6.QtCharts", "PySide6.Qt3DCore", "PySide6.QtPdf", "PySide6.QtSvgWidgets",
 ]
-HIDDEN = ["lifeboat.device.windows", "lifeboat.recover.winverify", "lifeboat.device.posix"]
+# The licenses of bundled packages (THIRD_PARTY_NOTICES.md points to them).
+LICENSES = copy_metadata("cryptography")
+HIDDEN = ["lifeboat.device.windows", "lifeboat.recover.winverify", "lifeboat.device.posix",
+          # AES for unlocking Mac volumes (imported when needed, so named here)
+          "cryptography.hazmat.primitives.ciphers", "cryptography.hazmat.primitives.keywrap"]
 
 gui = Analysis(  # noqa: F821
     [str(ROOT / "packaging" / "entry_gui.py")],
     pathex=[str(ROOT)],
-    datas=[(str(ROOT / "lifeboat" / "assets"), "lifeboat/assets"), (str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")],
+    datas=[(str(ROOT / "lifeboat" / "assets"), "lifeboat/assets"), (str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")]
+    + LICENSES,
     hiddenimports=HIDDEN + ["PySide6.QtSvg"],
     excludes=EXCLUDES,
     noarchive=False,
@@ -53,7 +60,7 @@ gui = Analysis(  # noqa: F821
 cli = Analysis(  # noqa: F821
     [str(ROOT / "packaging" / "entry_cli.py")],
     pathex=[str(ROOT)],
-    datas=[],
+    datas=LICENSES,
     hiddenimports=HIDDEN,
     excludes=EXCLUDES + ["PySide6", "shiboken6"],
     noarchive=False,

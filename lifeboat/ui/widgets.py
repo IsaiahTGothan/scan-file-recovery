@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import math
 import time
 from collections import deque
@@ -33,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from ..device.base import NO_MEDIA, NOT_ANSWERING, DeviceInfo
 from ..events import Choice, Event, Level, Progress
+from ..fs.apfs import LockedVolume
 from ..fs.model import F, Node
 from ..rescue.sectormap import PARTIAL, SectorMap, State
 from ..util import format_duration, format_rate, format_size, format_timestamp
@@ -699,6 +701,7 @@ class PreviewPane(QFrame):
     """Details of the selected item plus a picture / text / hex preview."""
 
     preview_requested = Signal(object)
+    unlock_requested = Signal(object)    # a locked (encrypted) volume's node
 
     def __init__(self) -> None:
         super().__init__()
@@ -737,21 +740,37 @@ class PreviewPane(QFrame):
         self.button = QPushButton(icons.icon("eye"), "Preview")
         self.button.clicked.connect(self._preview_clicked)
         layout.addWidget(self.button)
+        self.unlock = QPushButton(icons.icon("lock", "#ffffff"), "Unlock\u2026")
+        self.unlock.setProperty("primary", True)
+        self.unlock.setToolTip("Enter the volume's password to read its files")
+        self.unlock.clicked.connect(self._unlock_clicked)
+        self.unlock.setVisible(False)
+        layout.addWidget(self.unlock)
         self.show_node(None)
 
     def _preview_clicked(self) -> None:
         if self.node is not None:
             self.preview_requested.emit(self.node)
 
+    def _unlock_clicked(self) -> None:
+        if self.node is not None:
+            self.unlock_requested.emit(self.node)
+
     def show_node(self, node: Node | None) -> None:
         self.node = node
         self._rows: list[tuple[str, str]] = []
+        locked = node.ref if node is not None and isinstance(node.ref, LockedVolume) else None
+        self.unlock.setVisible(locked is not None)
+        self.button.setVisible(locked is None)
         if node is None:
             self.title.setText("No file selected")
             self.facts.setText("<span>Select a file to see its details.</span>")
             self.stack.setCurrentWidget(self.message)
             self.message.setText("")
             self.button.setEnabled(False)
+            return
+        if locked is not None:
+            self._show_locked(node, locked)
             return
         self.title.setText(node.name or "(root)")
         rows = []
@@ -775,11 +794,24 @@ class PreviewPane(QFrame):
         self.message.setText("Press Preview to look inside the file." if node.children is None else "")
         self.button.setEnabled(node.children is None and node.size > 0)
 
+    def _show_locked(self, node: Node, locked: LockedVolume) -> None:
+        t = current()
+        self.title.setText(node.name or locked.name or "Encrypted volume")
+        self._rows = [("Status", f"<b style='color:{t.warn}'>Encrypted, locked</b>"),
+                      ("Format", "APFS (FileVault or \u201cAPFS (Encrypted)\u201d)")]
+        if locked.hint:
+            self._rows.append(("Password hint", html.escape(locked.hint)))
+        self._show_rows(node)
+        self.stack.setCurrentWidget(self.message)
+        self.message.setText("The files of this Mac volume are encrypted. Unlock it with the password used on "
+                             "the Mac to see and recover them.\n\nThe password stays in memory until Lifeboat "
+                             "closes; nothing is written to the drive.")
+
     def _show_rows(self, node: Node) -> None:
         t = current()
         html_rows = "".join(
             f"<tr><td style='color:{t.muted};padding-right:10px'>{k}</td><td>{v}</td></tr>" for k, v in self._rows)
-        self.facts.setText(f"<table>{html_rows}</table><div style='color:{t.muted}'>{node.path()}</div>")
+        self.facts.setText(f"<table>{html_rows}</table><div style='color:{t.muted}'>{html.escape(node.path())}</div>")
 
     def show_layout(self, node: Node, fragments: int, problems: list[str], unsupported: str | None) -> None:
         """Details found while reading the file for the preview."""

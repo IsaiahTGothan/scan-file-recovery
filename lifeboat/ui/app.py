@@ -101,10 +101,22 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     from .main_window import MainWindow
 
+    if smoke:
+        # Packaging check, part 1: the decoders and the AES used to unlock Mac volumes are bundled.
+        from ..fs.apfs_crypto import self_test as crypto_test
+        from ..fs.applecomp import self_test as compression_test
+
+        try:
+            crypto_test()
+            compression_test()
+        except Exception as exc:  # reported as a failed check
+            log.exception("Smoke test: self-test failed")
+            print(f"Lifeboat smoke test FAILED: {exc}")
+            return 3
     window = MainWindow()
     window.show()
     if smoke:
-        # Packaging check: build the whole window, open and close every dialog, run the
+        # Packaging check, part 2: build the whole window, open and close every dialog, run the
         # event loop briefly, quit - and exit cleanly (a crash on exit fails the check).
         from functools import partial
 
@@ -133,6 +145,7 @@ def _exercise_dialogs(window: QWidget) -> None:
         ImageDialog,
         RecoverDialog,
         SummaryDialog,
+        UnlockDialog,
     )
     from .drive_check import DriveCheckDialog
     from .settings_dialog import SettingsDialog
@@ -142,6 +155,7 @@ def _exercise_dialogs(window: QWidget) -> None:
         RecoverDialog(window, disk, 3, 3000, 0, 0, 1000), ImageDialog(window, disk), DeepScanDialog(window, disk),
         SettingsDialog(window), AboutDialog(window), ErrorDialog(window, "Smoke test", "Not a real error."),
         SummaryDialog(window, RecoverySummary("", [], 0.0)), DriveCheckDialog(window),
+        UnlockDialog(window, "Smoke test", "a hint", "Not a real error."),
     ]
     for dialog in dialogs:
         dialog.show()

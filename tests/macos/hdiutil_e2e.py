@@ -215,6 +215,7 @@ def cmd_verify_api() -> None:
 def cmd_verify_cli(exe: str) -> None:
     state = _state()
     run([exe, "--version"])
+    run([exe, "selftest"])                     # the bundle has AES (unlocking Mac volumes) and the decoders
     run([exe, "devices"])
     res = run([exe, "check", "--json"], check=False)
     assert res.returncode in (0, 1), f"lifeboat-cli check exited with {res.returncode}"

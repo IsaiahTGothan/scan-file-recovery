@@ -126,6 +126,25 @@ def _install_ctrl_c(control: JobControl) -> None:
     signal.signal(signal.SIGINT, handler)
 
 
+def cmd_selftest(_args: argparse.Namespace) -> int:
+    """Run the built-in checks (test vectors); exit 1 if one fails."""
+    from .fs.apfs_crypto import self_test as crypto_test
+    from .fs.applecomp import self_test as compression_test
+
+    failed = 0
+    for name, check in (("AES: unlocking encrypted Mac volumes", crypto_test),
+                        ("LZFSE and LZVN: compressed Mac files", compression_test)):
+        try:
+            check()
+        except Exception as exc:  # noqa: BLE001 - every failure is reported, none stops the others
+            failed += 1
+            print(f"FAILED  {name}: {exc}")
+        else:
+            print(f"OK      {name}")
+    print("Self-test passed." if not failed else f"{failed} check(s) failed.")
+    return 1 if failed else 0
+
+
 def cmd_devices(args: argparse.Namespace) -> int:
     devices = list_devices()
     if args.json:
@@ -167,7 +186,10 @@ def _scan(args: argparse.Namespace, control: JobControl, console: Console):
     info, reader, bus = _open(args.source, args.sector_size)
     bus.subscribe(console.event)
     reader.control = control
-    options = ScanOptions(carve=not getattr(args, "no_carve", False))
+    passwords = list(getattr(args, "password", None) or [])
+    if os.environ.get("LIFEBOAT_PASSWORD"):
+        passwords.append(os.environ["LIFEBOAT_PASSWORD"])
+    options = ScanOptions(carve=not getattr(args, "no_carve", False), passwords=passwords)
     scanner = Scanner(reader, info, bus, control, console.progress, CliInterventions(control, args.wait), options)
     result = scanner.deep_scan() if args.deep else scanner.quick_scan()
     if console._line:
@@ -303,6 +325,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--sector-size", type=int, choices=[512, 1024, 2048, 4096], help="image sector size")
         sp.add_argument("--wait", type=float, default=1800, help="seconds to wait for a disconnected drive")
         sp.add_argument("-q", "--quiet", action="store_true")
+        sp.add_argument("--password", action="append", metavar="PASSWORD",
+                        help="password of an encrypted Mac (APFS) volume; repeatable. The environment "
+                             "variable LIFEBOAT_PASSWORD works too and keeps it out of the shell history")
 
     p = sub.add_parser("scan", help="scan a drive or image and list what is recoverable")
     source_args(p)
@@ -337,6 +362,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--same-drive", action="store_true",
                    help="continue an existing image although its map names another drive (same drive, other adapter)")
     p.set_defaults(func=cmd_image)
+
+    p = sub.add_parser("selftest", help="check that this copy of Lifeboat is complete (its decoders and the "
+                                        "encryption needed to unlock Mac volumes)")
+    p.set_defaults(func=cmd_selftest)
     return parser
 
 

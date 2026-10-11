@@ -117,7 +117,8 @@ def probe(reader: RescueReader, offset: int, size: int | None = None) -> Probe:
 
 
 def mount(reader: RescueReader, offset: int, found: Probe, events: EventBus | None = None,
-          control: JobControl | None = None, metadata_retry_seconds: float = 180.0) -> Volume | None:
+          control: JobControl | None = None, metadata_retry_seconds: float = 180.0,
+          passwords: list[str] | None = None) -> Volume | None:
     if not found.supported or found.boot is None:
         return None
     if found.kind == "NTFS":
@@ -139,5 +140,5 @@ def mount(reader: RescueReader, offset: int, found: Probe, events: EventBus | No
         return HfsPlusVolume(reader, found.boot, events, control, metadata_retry_seconds)
     if found.kind == "APFS":
         assert isinstance(found.boot, NxSuperblock)
-        return ApfsVolume(reader, found.boot, events, control, metadata_retry_seconds)
+        return ApfsVolume(reader, found.boot, events, control, metadata_retry_seconds, passwords)
     return None

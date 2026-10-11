@@ -58,7 +58,7 @@ Requirements: Windows 10 or 11, 64-bit.
 
 Requirements: macOS 14 (Sonoma) or later.
 
-On a Mac, Lifeboat lists every physical drive (and attached disk images) with its name, size and connection, reads through the raw device (`/dev/rdiskN`), and has the same Drive check. Mac drives (HFS+ and APFS, including Time Machine disks) are browsed with their real names and folders on both Mac and Windows; encrypted APFS volumes have to be unlocked on a Mac first. The command line tool is inside the app: `sudo /Applications/Lifeboat.app/Contents/MacOS/lifeboat-cli devices`.
+On a Mac, Lifeboat lists every physical drive (and attached disk images) with its name, size and connection, reads through the raw device (`/dev/rdiskN`), and has the same Drive check. Mac drives (HFS+ and APFS, including Time Machine disks) are browsed with their real names and folders on both Mac and Windows, encrypted APFS volumes too once you give their password. The command line tool is inside the app: `sudo /Applications/Lifeboat.app/Contents/MacOS/lifeboat-cli devices`.
 
 Mac tips: if macOS says "The disk you attached was not readable by this computer", click **Ignore**, never **Initialize**, and don't run **First Aid** on a failing drive (both write to it). Spotlight starts indexing every drive you connect; on a failing drive that's a lot of extra reading, so add its volume under **System Settings → Spotlight → Search Privacy**, or keep it unmounted.
 
@@ -94,6 +94,7 @@ While a job runs, the panel at the top shows how far it is, the reading speed (w
 * **Drive in Device Manager but not in Disk Management?** Click **Drive check** (top of *Sources*). It lists every storage device Windows detects, says for each one whether Disk Management can use it and whether its first sector reads, and explains what to try next: another cable, port, power supply or adapter, or a lab. A drive that is detected but doesn't report its size also stays in *Sources*, marked **CHECK**, instead of disappearing. The check only reads (one small read per drive, with a time limit) and leaves alone the drive a job is reading. **Copy report** puts the results on the clipboard, e.g. for a ticket.
 * **A drive that doesn't spin up or isn't detected at all** has a hardware fault (PCB, heads, motor). No software can read it; it needs a clean-room lab.
 * **BitLocker drives:** unlock the drive in Windows (password or recovery key), then select its **drive letter** under *Volumes*. Lifeboat then reads the decrypted data through Windows.
+* **Encrypted Mac drives** (FileVault, "APFS (Encrypted)", encrypted Time Machine backups) show up after a scan with a lock. Select the volume, click **Unlock** and type the password used on the Mac (the disk's password, a user's login password for FileVault, or the recovery key). Lifeboat decrypts it itself, on Windows too, without writing anything; the password stays in memory until Lifeboat closes. On the command line: `--password` (or the environment variable `LIFEBOAT_PASSWORD`, which keeps it out of the shell history).
 
 ## What the results mean
 
@@ -140,11 +141,11 @@ Lifeboat makes problems impossible to miss:
 | | |
 |---|---|
 | Partition tables | MBR (including extended/logical partitions), GPT (with automatic fallback to the backup GPT), Apple Partition Map, drives with no partition table |
-| Filesystems | **NTFS** (deleted files and folders, compressed, sparse, alternate data streams, hard links, damaged MFT areas, backup boot sector, $MFTMirr), **exFAT**, **FAT32 / FAT16 / FAT12** (long names, including on deleted entries; second FAT copy used when the first is damaged), **Mac HFS+** (Mac OS Extended, journaled and case-sensitive too: deleted files and folders from the journal and unused catalog nodes, files macOS compressed, hard links, Time Machine folder links, resource forks, unfinished journal changes applied in memory, backup volume header), **Mac APFS** (every volume of the container, compressed, sparse and cloned files, hard links, snapshots, recently deleted files from older checkpoints, newest valid checkpoint when the superblock is damaged) |
+| Filesystems | **NTFS** (deleted files and folders, compressed, sparse, alternate data streams, hard links, damaged MFT areas, backup boot sector, $MFTMirr), **exFAT**, **FAT32 / FAT16 / FAT12** (long names, including on deleted entries; second FAT copy used when the first is damaged), **Mac HFS+** (Mac OS Extended, journaled and case-sensitive too: deleted files and folders from the journal and unused catalog nodes, files macOS compressed, hard links, Time Machine folder links, resource forks, unfinished journal changes applied in memory, backup volume header), **Mac APFS** (every volume of the container, encrypted volumes unlocked with their password, compressed, sparse and cloned files, hard links, snapshots, recently deleted files from older checkpoints, newest valid checkpoint when the superblock is damaged) |
 | Deep scan | Lost and deleted NTFS/exFAT/FAT/HFS+ partitions (also via their backup boot sectors and volume headers), deleted APFS files with their names and folders (from the old file-tree pages APFS leaves in free space), and files by signature: JPEG, PNG, GIF, BMP, TIFF, Canon CR2/CR3, Nikon NEF, Sony ARW, Olympus ORF, Pentax PEF, DNG, HEIC/AVIF, PSD, MP4, MOV, M4A, 3GP, AVI, WAV, WebP, MKV/WebM, MP3, OGG, PDF, DOCX/XLSX/PPTX, ODT/ODS, EPUB, ZIP, DOC/XLS/PPT/MSG, 7-Zip, RAR, SQLite, Outlook PST |
 | Sources | Physical drives, drive letters (volumes), disk images (`.img`, `.dd`, `.raw`, `.bin`, `.iso`, split `.001/.002...`, fixed-size `.vhd`) |
 
-Not supported yet: Linux (ext2/3/4) and ReFS filesystems (deep scan still recovers common file types from them by signature), and encrypted APFS volumes (FileVault, "APFS (Encrypted)", encrypted Time Machine backups): Lifeboat detects them and explains how to unlock them on a Mac. A Mac's internal SSD (T2 and Apple silicon) is encrypted by the Mac's own chip and can't be read anywhere else. Windows EFS-encrypted files can't be decrypted without the original user's key, and Windows system files compressed with "CompactOS" (WOF) are listed but skipped.
+Not supported yet: Linux (ext2/3/4) and ReFS filesystems (deep scan still recovers common file types from them by signature). A Mac's internal SSD (T2 and Apple silicon) is encrypted by the Mac's own chip and can't be read anywhere else. Windows EFS-encrypted files can't be decrypted without the original user's key, and Windows system files compressed with "CompactOS" (WOF) are listed but skipped.
 
 ## Command line
 
@@ -159,6 +160,8 @@ lifeboat-cli recover \\.\PhysicalDrive2 D:\Recovered --path "Users/Bob/Documents
 lifeboat-cli recover \\.\PhysicalDrive2 D:\Recovered\"Lifeboat Recovery 2026-10-09 13.48" --resume
 lifeboat-cli image \\.\PhysicalDrive2 E:\drive2.img
 lifeboat-cli recover E:\drive2.img D:\Recovered --deleted-only
+lifeboat-cli recover \\.\PhysicalDrive3 D:\Recovered --password "the Mac password"
+lifeboat-cli selftest
 ```
 
 Exit codes: `0` everything recovered, `1` finished with damaged or failed files, `2` failed (including no matching files), `3` bad arguments, `130` stopped with Ctrl+C. `lifeboat-cli check` (the Drive check, `--json` for scripts) exits with `1` when a device needs attention.

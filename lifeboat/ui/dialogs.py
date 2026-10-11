@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import os
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
@@ -530,6 +531,85 @@ class DeepScanDialog(QDialog):
         groups = {g for g, b in self.groups.items() if b.isChecked()}
         return {"find_partitions": self.partitions.isChecked(),
                 "carve": self.carve.isChecked() and bool(groups), "groups": groups}
+
+
+class UnlockDialog(QDialog):
+    """Asks for the password of an encrypted Mac (APFS) volume."""
+
+    def __init__(self, parent: QWidget, name: str, hint: str = "", error: str = "") -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Unlock encrypted volume")
+        self.setMinimumWidth(520)
+        t = current()
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        glyph = QLabel()
+        glyph.setPixmap(icons.pixmap("lock", 44, t.accent))
+        head.addWidget(glyph, 0, Qt.AlignmentFlag.AlignTop)
+        texts = QVBoxLayout()
+        texts.setSpacing(4)
+        big = QLabel(f"Unlock “{name}”")
+        big.setObjectName("BigTitle")
+        big.setWordWrap(True)
+        about = QLabel("This Mac volume is encrypted (FileVault or “APFS (Encrypted)”). Enter the password "
+                       "used on the Mac: the disk's password, a user's login password for FileVault, or its "
+                       "recovery key.")
+        about.setWordWrap(True)
+        about.setProperty("muted", True)
+        texts.addWidget(big)
+        texts.addWidget(about)
+        head.addLayout(texts, 1)
+        layout.addLayout(head)
+        card = QFrame()
+        card.setObjectName("Card")
+        form = QVBoxLayout(card)
+        form.setContentsMargins(14, 12, 14, 12)
+        form.setSpacing(8)
+        if hint:
+            hint_label = QLabel(f"Password hint: <b>{html.escape(hint)}</b>")
+            hint_label.setTextFormat(Qt.TextFormat.RichText)
+            hint_label.setWordWrap(True)
+            form.addWidget(hint_label)
+        self.field = QLineEdit()
+        self.field.setEchoMode(QLineEdit.EchoMode.Password)
+        self.field.setPlaceholderText("Password")
+        self.field.setMinimumHeight(34)
+        form.addWidget(self.field)
+        self.reveal = QCheckBox("Show the password")
+        self.reveal.toggled.connect(self._reveal)
+        form.addWidget(self.reveal)
+        self.error = QLabel(error)
+        self.error.setWordWrap(True)
+        self.error.setStyleSheet(f"color:{t.bad}")
+        self.error.setVisible(bool(error))
+        form.addWidget(self.error)
+        layout.addWidget(card)
+        note = QLabel("The password stays in this computer's memory until Lifeboat closes. It is never saved, and "
+                      "nothing is written to the drive.")
+        note.setWordWrap(True)
+        note.setProperty("muted", True)
+        layout.addWidget(note)
+        buttons = QDialogButtonBox()
+        self.ok = _primary(QPushButton(icons.icon("lock", "#ffffff"), "Unlock"))
+        self.ok.setEnabled(False)
+        buttons.addButton(self.ok, QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.field.textChanged.connect(self._edited)
+        self.field.setFocus()
+
+    def _reveal(self, on: bool) -> None:
+        self.field.setEchoMode(QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password)
+
+    def _edited(self, text: str) -> None:
+        self.ok.setEnabled(bool(text))
+
+    def password(self) -> str:
+        return self.field.text()
 
 
 class AboutDialog(QDialog):

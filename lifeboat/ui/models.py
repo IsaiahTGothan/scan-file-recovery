@@ -20,6 +20,7 @@ from PySide6.QtCore import QAbstractItemModel, QAbstractTableModel, QModelIndex,
 from PySide6.QtGui import QBrush, QColor, QFont
 
 from ..events import Event, Level
+from ..fs.apfs import LockedVolume
 from ..fs.model import F, Node
 from ..recover.engine import FileTask, Status
 from ..util import format_size, format_timestamp
@@ -153,6 +154,8 @@ def tooltip(node: Node) -> str:
         lines.append("Found by its signature; the original name and folder are unknown.")
     if flags & F.ENCRYPTED:
         lines.append("Encrypted with Windows EFS: it cannot be decrypted without the original user's key.")
+    if isinstance(node.ref, LockedVolume):
+        lines.append("Encrypted Mac volume, locked. Select it and click Unlock to read it with its password.")
     if flags & F.DAMAGED_META:
         lines.append("Its file record was partly unreadable.")
     return "\n".join(lines)
@@ -162,6 +165,8 @@ def node_icon(node: Node):
     t = current()
     deleted = bool(node.flags & F.DELETED)
     tint = t.bad if node.flags & F.OVERWRITTEN else (t.muted if deleted else t.text)
+    if isinstance(node.ref, LockedVolume):
+        return icons.icon("lock", t.warn)
     if node.flags & F.VOLUME:
         if node.flags & F.UNSUPPORTED:
             return icons.icon("warning", t.warn)
@@ -188,13 +193,18 @@ class Selection(QObject):
         self.bytes = 0
         self.version = 0
 
-    def set_root(self, root: Node | None) -> None:
+    def set_root(self, root: Node | None, keep_ticks: bool = False) -> None:
+        """Show ``root``; its files start unticked, or keep their ticks (the same scan shown again)."""
         self.root = root
         self.count = 0
         self.bytes = 0
         if root is not None:
             for node in root.walk():
-                node.check = 0
+                if not keep_ticks:
+                    node.check = 0
+                elif node.check and node.children is None:
+                    self.count += 1
+                    self.bytes += node.size
             self.recount()
         self.changed.emit()
 
