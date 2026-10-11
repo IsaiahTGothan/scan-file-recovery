@@ -42,6 +42,8 @@ GPT_TYPES = {
     "48465300-0000-11AA-AA11-00306543ECAC": "Apple HFS+",
     "7C3457EF-0000-11AA-AA11-00306543ECAC": "Apple APFS",
     "426F6F74-0000-11AA-AA11-00306543ECAC": "Apple boot",
+    "53746F72-6167-11AA-AA11-00306543ECAC": "Apple Core Storage",
+    "52637672-7900-11AA-AA11-00306543ECAC": "Apple Recovery HD",
     "0FC63DAF-8483-4772-8E79-3D69D8477DE4": "Linux filesystem",
     "0657FD6D-A4AB-43C4-84E5-0933C84B4F4F": "Linux swap",
     "E6D6D379-F507-44C2-A23C-238F2A3DF928": "Linux LVM",
@@ -62,7 +64,7 @@ class PartitionEntry:
     index: int
     start: int                 # byte offset on the device
     size: int                  # bytes
-    scheme: str                # "MBR", "GPT", "None"
+    scheme: str                # "MBR", "GPT", "APM", "None"
     type_code: str
     type_name: str
     name: str = ""
@@ -94,6 +96,48 @@ def _looks_like_boot_sector(sector: bytes) -> bool:
     if NtfsBoot.parse(sector) or ExfatBoot.parse(sector) or FatBoot.parse(sector):
         return True
     return sector[3:11] in (b"-FVE-FS-", b"ReFS\x00\x00\x00\x00")
+
+
+APM_TYPES = {
+    "Apple_HFS": "Apple HFS+", "Apple_HFSX": "Apple HFS+ (case-sensitive)", "Apple_APFS": "Apple APFS",
+    "Apple_Boot": "Apple boot", "Apple_Boot_RAID": "Apple boot", "Apple_UFS": "Apple UFS",
+    "Apple_RAID": "Apple RAID", "Apple_CoreStorage": "Apple Core Storage", "DOS_FAT_32": "FAT32",
+    "DOS_FAT_16": "FAT16", "DOS_FAT_12": "FAT12", "Windows_FAT_32": "FAT32", "Windows_NTFS": "NTFS / exFAT",
+}
+APM_SKIP = {"Apple_partition_map", "Apple_Free", "Apple_Void", "Apple_Scratch", "Apple_Extra", "Apple_Patches",
+            "Apple_Bootstrap", "Apple_FWDriver", "Apple_Loader"}
+
+
+def _apple_fs_at_start(head: bytes) -> bool:
+    """An HFS+ or APFS volume directly at sector 0 (no partition table)."""
+    return head[1024:1026] in (b"H+", b"HX") or (len(head) >= 36 and head[32:36] == b"NXSB")
+
+
+def read_apm(reader: RescueReader, head: bytes) -> PartitionTable | None:
+    """Apple Partition Map: PowerPC-era Macs and many older Mac-formatted drives and disk images."""
+    if head[:2] != b"ER":
+        return None
+    block = struct.unpack_from(">H", head, 2)[0]
+    for size in [b for b in (block, 512) if b in (512, 1024, 2048, 4096)]:
+        first = bytes(reader.read_critical(size, 512).data) if size + 512 <= reader.size else b""
+        if first[:2] != b"PM":
+            continue
+        count = min(struct.unpack_from(">I", first, 4)[0], 256)
+        entries: list[PartitionEntry] = []
+        for index in range(1, count + 1):
+            raw = first if index == 1 else bytes(reader.read_critical(index * size, 512).data)
+            if raw[:2] != b"PM":
+                break
+            start, blocks = struct.unpack_from(">II", raw, 8)
+            name = raw[16:48].split(b"\0", 1)[0].decode("mac_roman", "replace")
+            ptype = raw[48:80].split(b"\0", 1)[0].decode("ascii", "replace")
+            if ptype in APM_SKIP or ptype.startswith("Apple_Driver") or blocks == 0:
+                continue
+            entries.append(PartitionEntry(index=index, start=start * size, size=blocks * size, scheme="APM",
+                                          type_code=ptype, type_name=APM_TYPES.get(ptype, ptype), name=name,
+                                          sector_size=size))
+        return PartitionTable("APM", entries, size)
+    return None
 
 
 def _parse_gpt(blob: bytes, header_off: int, ss: int) -> tuple[dict[str, int | bytes], bool] | None:
@@ -285,11 +329,14 @@ def read_partition_table(reader: RescueReader) -> PartitionTable:
     mbr_sector = head[:512]
     if gpt is not None:
         return gpt
-    if _looks_like_boot_sector(mbr_sector):
+    if _looks_like_boot_sector(mbr_sector) or _apple_fs_at_start(head):
         entry = PartitionEntry(index=1, start=0, size=reader.size, scheme="None",
                                type_code="", type_name="Whole drive (no partition table)",
                                sector_size=reader.sector_size)
         return PartitionTable("None", [entry], reader.sector_size)
+    apm = read_apm(reader, head)
+    if apm is not None:
+        return apm
     mbr = read_mbr(reader, head)
     if mbr is not None:
         protective = [e for e in mbr.entries if e.type_code == "0xEE"]

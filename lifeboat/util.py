@@ -88,6 +88,20 @@ def filetime_to_unix(filetime: int) -> float | None:
     return _sane((filetime - _FILETIME_EPOCH_DELTA) / 10_000_000)
 
 
+def hfs_time(seconds: int) -> float | None:
+    """Convert an HFS+ date (seconds since 1904-01-01, UTC) to POSIX seconds."""
+    if seconds <= 0:
+        return None
+    return _sane(float(seconds - 2_082_844_800))
+
+
+def apfs_time(nanoseconds: int) -> float | None:
+    """Convert an APFS date (nanoseconds since 1970-01-01, UTC) to POSIX seconds."""
+    if nanoseconds <= 0:
+        return None
+    return _sane(nanoseconds / 1e9)
+
+
 def unix_to_filetime(ts: float) -> int:
     return int(round(ts * 10_000_000)) + _FILETIME_EPOCH_DELTA
 

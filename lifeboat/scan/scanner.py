@@ -12,6 +12,7 @@ reported and the scan goes on.
 from __future__ import annotations
 
 import logging
+import struct
 import time
 import traceback
 from collections.abc import Callable
@@ -35,6 +36,7 @@ from ..fs.carving import Carver
 from ..fs.detect import Probe, mount, probe
 from ..fs.exfat import ExfatBoot
 from ..fs.fat import FatBoot
+from ..fs.hfsplus import HfsHeader
 from ..fs.model import F, Node, Volume
 from ..fs.ntfs import NtfsBoot
 from ..fs.partitions import PartitionEntry, PartitionTable, read_partition_table
@@ -266,6 +268,36 @@ class Scanner:
                     sector = data[start:start + 512]
                     self._consider_boot(base + start, sector, out)
                 index = data.find(magic, index + 1)
+        # Mac HFS+ volume headers: 1 KiB into the volume, and a copy 1 KiB before its end.
+        for magic in (b"H+\x00\x04", b"HX\x00\x05"):
+            index = data.find(magic)
+            while index >= 0:
+                if (base + index) % 512 == 0:
+                    self._consider_hfs(base + index, data[index:index + 512], out)
+                index = data.find(magic, index + 1)
+
+    def _consider_hfs(self, at: int, raw: bytes, out: dict[int, Probe]) -> None:
+        if len(raw) < 512:
+            raw = bytes(self.reader.read(at, 512).data)
+        probe_header = HfsHeader.parse(raw, 0)
+        if probe_header is None:
+            return
+        for start, backup in ((at - 1024, False), (at + 1024 - probe_header.volume_size, True)):
+            if start < 0 or start in out:
+                continue
+            header = HfsHeader.parse(raw, start)
+            if header is not None and self._hfs_valid(header):
+                header.used_backup = backup
+                out[start] = Probe("HFS+", True, header, used_backup=backup)
+
+    def _hfs_valid(self, header: HfsHeader) -> bool:
+        """The catalog's first node is a B-tree header node with a sane node size."""
+        node_at = header.start + header.catalog.extents[0][0] * header.block_size
+        if node_at + 512 > self.reader.size:
+            return False
+        head = bytes(self.reader.read(node_at, 64).data)
+        node_size = struct.unpack_from(">H", head, 32)[0]
+        return head[8] == 1 and 512 <= node_size <= 32768 and not node_size & (node_size - 1)
 
     def _consider_boot(self, offset: int, sector: bytes, out: dict[int, Probe]) -> None:
         boot = NtfsBoot.parse(sector)
@@ -316,7 +348,7 @@ class Scanner:
                 continue
             found = candidates[start]
             boot = found.boot
-            if isinstance(boot, NtfsBoot | ExfatBoot | FatBoot):
+            if isinstance(boot, NtfsBoot | ExfatBoot | FatBoot | HfsHeader):
                 size = boot.volume_size
             else:
                 continue

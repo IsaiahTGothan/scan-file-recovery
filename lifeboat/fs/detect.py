@@ -8,13 +8,14 @@ from ..events import EventBus, JobControl
 from ..rescue.reader import RescueReader
 from .exfat import ExfatBoot, ExfatVolume
 from .fat import FatBoot, FatVolume
+from .hfsplus import HfsHeader, HfsPlusVolume, backup_header, primary_header
 from .model import Volume
 from .ntfs import NtfsBoot, NtfsVolume
 
 
 @dataclass
 class Probe:
-    kind: str                       # "NTFS", "FAT", "exFAT", or an unsupported name, or ""
+    kind: str                       # "NTFS", "FAT", "exFAT", "HFS+", or an unsupported name, or ""
     supported: bool
     boot: object | None = None
     used_backup: bool = False
@@ -24,8 +25,9 @@ class Probe:
 UNSUPPORTED_NOTES = {
     "BitLocker": "BitLocker-encrypted. Unlock it in Windows, then choose its drive letter as the source.",
     "ReFS": "ReFS is not supported. Use Deep Scan to recover files by signature.",
-    "HFS+": "Mac HFS+ is not supported yet. Use Deep Scan to recover files by signature.",
     "APFS": "Mac APFS is not supported yet. Use Deep Scan to recover files by signature.",
+    "Core Storage": "Mac Core Storage volume (FileVault 2 or Fusion Drive on macOS 10.7-10.12); unlock it on a Mac, "
+                    "or use Deep Scan to recover files by signature.",
     "ext": "Linux ext2/3/4 is not supported. Use Deep Scan to recover files by signature.",
     "LUKS": "Linux encrypted (LUKS) volume; it cannot be read without unlocking it.",
     "swap": "Linux swap space (contains no files).",
@@ -65,11 +67,17 @@ def probe(reader: RescueReader, offset: int, size: int | None = None) -> Probe:
     fboot = FatBoot.parse(sector)
     if fboot is not None:
         return Probe("FAT", True, fboot)
+    hfs = primary_header(reader, offset, head)
+    if hfs is not None:
+        return Probe("HFS+", True, hfs)
     other = _identify_other(head)
     if other:
         return Probe(other, False, note=UNSUPPORTED_NOTES.get(other, ""))
-    # Backups of damaged boot sectors.
+    # Backups of damaged boot sectors and volume headers.
     if size:
+        hfs = backup_header(reader, offset, size)
+        if hfs is not None:
+            return Probe("HFS+", True, hfs, used_backup=True)
         for ss in (512, 4096):
             tail_off = offset + size - ss
             if tail_off <= offset or tail_off + 512 > reader.size:
@@ -117,4 +125,7 @@ def mount(reader: RescueReader, offset: int, found: Probe, events: EventBus | No
     if found.kind == "FAT":
         assert isinstance(found.boot, FatBoot)
         return FatVolume(reader, offset, found.boot, events, control, found.used_backup)
+    if found.kind == "HFS+":
+        assert isinstance(found.boot, HfsHeader)
+        return HfsPlusVolume(reader, found.boot, events, control, metadata_retry_seconds)
     return None

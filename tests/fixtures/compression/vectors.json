@@ -1,0 +1,38 @@
+{
+ "lzfse_text": {
+  "method": "lzfse",
+  "size": 150000,
+  "sha256": "9de341d02ac05943117ddc5c245d922dcd98dc3e6f7dca972c5ac05f5602eb6d",
+  "stored": 22949
+ },
+ "lzfse_short": {
+  "method": "lzfse",
+  "size": 3000,
+  "sha256": "5c0be94fcf8d529b1f26119d9bd8a857bed659c19b46f49e65275a59dfa860db",
+  "stored": 767
+ },
+ "lzfse_noise": {
+  "method": "lzfse",
+  "size": 5000,
+  "sha256": "f15499e3a965c17ec417261011a45cc661389060f41536d7abda7ade174240e5",
+  "stored": 5242
+ },
+ "lzfse_mixed": {
+  "method": "lzfse",
+  "size": 79000,
+  "sha256": "06cbc0368898b82c7f6fbd7ba1116c6e61afaad2edcd9e52060af72e627cd9b4",
+  "stored": 15528
+ },
+ "lzvn_text": {
+  "method": "lzvn",
+  "size": 65536,
+  "sha256": "0bffcec5c4764df4b1b062ef6a92b1076777d1d85ccb7714b49b903e90d75e68",
+  "stored": 15153
+ },
+ "lzvn_runs": {
+  "method": "lzvn",
+  "size": 35000,
+  "sha256": "6d0c90394e533284b4484f19ece3c1f251d9c501e35511c8a2bd39d0350c3b28",
+  "stored": 4802
+ }
+}

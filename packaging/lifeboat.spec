@@ -45,7 +45,7 @@ HIDDEN = ["lifeboat.device.windows", "lifeboat.recover.winverify", "lifeboat.dev
 gui = Analysis(  # noqa: F821
     [str(ROOT / "packaging" / "entry_gui.py")],
     pathex=[str(ROOT)],
-    datas=[(str(ROOT / "lifeboat" / "assets"), "lifeboat/assets")],
+    datas=[(str(ROOT / "lifeboat" / "assets"), "lifeboat/assets"), (str(ROOT / "THIRD_PARTY_NOTICES.md"), ".")],
     hiddenimports=HIDDEN + ["PySide6.QtSvg"],
     excludes=EXCLUDES,
     noarchive=False,

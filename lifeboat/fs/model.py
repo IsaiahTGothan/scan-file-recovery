@@ -167,17 +167,35 @@ class CompressedRuns:
 
 
 @dataclass
+class CompressedChunks:
+    """Apple compression (decmpfs, HFS+ and APFS): the file is cut into pieces of ``chunk_size``
+    bytes, each compressed on its own. The compressed pieces are either ``inline`` (small files:
+    one piece, stored in an extended attribute) or at ``chunks`` offsets inside ``source``, the
+    file's resource fork."""
+
+    method: str                                         # "zlib", "lzvn", "lzfse" or "raw"
+    chunk_size: int
+    chunks: list[tuple[int, int]] = field(default_factory=list)   # (offset in source, length)
+    source: FileLayout | None = None
+    inline: bytes | None = None
+    error: str = ""                                     # set when the piece table is unreadable
+
+
+@dataclass
 class FileLayout:
     size: int
     extents: list[Extent] = field(default_factory=list)
     valid_size: int | None = None
     resident: bytes | None = None
     compressed: CompressedRuns | None = None
+    chunked: CompressedChunks | None = None
     problems: list[str] = field(default_factory=list)
     unsupported: str | None = None
 
     def disk_ranges(self) -> list[tuple[int, int]]:
         """Absolute device ranges holding the file's data (sorted, merged)."""
+        if self.chunked is not None:
+            return self.chunked.source.disk_ranges() if self.chunked.source is not None else []
         out: list[tuple[int, int]] = []
         valid = self.size if self.valid_size is None else min(self.valid_size, self.size)
         if self.compressed is not None:
@@ -202,6 +220,8 @@ class FileLayout:
 
     def first_disk_offset(self) -> int:
         """Where the data starts on disk, used to order reads for fewer seeks."""
+        if self.chunked is not None:
+            return self.chunked.source.first_disk_offset() if self.chunked.source is not None else -1
         if self.compressed is not None:
             for _vcn, disk, _count in self.compressed.runs:
                 if disk >= 0:
@@ -214,6 +234,8 @@ class FileLayout:
 
     @property
     def fragments(self) -> int:
+        if self.chunked is not None:
+            return self.chunked.source.fragments if self.chunked.source is not None else 0
         if self.compressed is not None:
             return sum(1 for _v, disk, _c in self.compressed.runs if disk >= 0)
         return sum(1 for ext in self.extents if ext.disk_offset >= 0)

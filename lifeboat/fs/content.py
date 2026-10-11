@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..rescue.reader import ReadMode, RescueReader
+from .applecomp import CompressionError, decompress_chunk
 from .lznt1 import LZNT1Error, decompress
 from .model import INVALID, SPARSE, FileLayout
 
@@ -50,6 +51,7 @@ class FileContentReader:
     def __init__(self, layout: FileLayout, reader: RescueReader) -> None:
         self.layout = layout
         self.reader = reader
+        self._piece: tuple[int, bytes] | None = None   # the last Apple-compressed piece decoded
 
     def read(self, start: int, end: int, mode: ReadMode = ReadMode.FAST) -> ContentChunk:
         size = self.layout.size
@@ -67,7 +69,9 @@ class FileContentReader:
             chunk.data[: len(piece)] = piece
             chunk.states.append((start, end, OK))
             return chunk
-        if self.layout.compressed is not None:
+        if self.layout.chunked is not None:
+            self._read_chunked(chunk, start, end, mode)
+        elif self.layout.compressed is not None:
             self._read_compressed(chunk, start, end, mode)
         else:
             self._read_extents(chunk, start, end, mode)
@@ -200,6 +204,54 @@ class FileContentReader:
                 plain = decompress(bytes(raw), unit_bytes)
             except LZNT1Error:
                 chunk.states.append((lo, hi, BAD))
+                continue
+            rel = lo - chunk.offset
+            chunk.data[rel:rel + (hi - lo)] = plain[lo - u_start:hi - u_start]
+            chunk.states.append((lo, hi, OK))
+
+    # ------------------------------------------------------- Apple compressed
+    def _plain_piece(self, index: int, mode: ReadMode) -> tuple[bytes | None, int]:
+        """Decompressed piece ``index``: (bytes or None, state when it could not be had)."""
+        comp = self.layout.chunked
+        assert comp is not None
+        if self._piece is not None and self._piece[0] == index:
+            return self._piece[1], OK
+        size = self.layout.size
+        expected = min(comp.chunk_size, size - index * comp.chunk_size)
+        if comp.inline is not None:
+            raw = comp.inline
+        else:
+            if comp.source is None or index >= len(comp.chunks):
+                return None, BAD
+            off, length = comp.chunks[index]
+            got = FileContentReader(comp.source, self.reader).read(off, off + length, mode)
+            states = [st for _s, _e, st in got.states]
+            if BAD in states:
+                return None, BAD
+            if UNREAD in states:
+                return None, UNREAD
+            raw = bytes(got.data)
+        try:
+            plain = decompress_chunk(comp.method, raw, expected)
+        except CompressionError:
+            return None, BAD
+        self._piece = (index, plain)
+        return plain, OK
+
+    def _read_chunked(self, chunk: ContentChunk, start: int, end: int, mode: ReadMode) -> None:
+        comp = self.layout.chunked
+        assert comp is not None
+        if comp.error:
+            chunk.states.append((start, end, BAD))
+            return
+        unit = comp.chunk_size if comp.inline is None else max(1, self.layout.size)
+        for index in range(start // unit, (end - 1) // unit + 1):
+            u_start = index * unit
+            lo = max(start, u_start)
+            hi = min(end, u_start + unit)
+            plain, state = self._plain_piece(index, mode)
+            if plain is None:
+                chunk.states.append((lo, hi, state))
                 continue
             rel = lo - chunk.offset
             chunk.data[rel:rel + (hi - lo)] = plain[lo - u_start:hi - u_start]
