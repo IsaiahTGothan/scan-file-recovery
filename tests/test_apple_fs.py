@@ -247,3 +247,36 @@ def test_apfs_encrypted_volume_is_explained(disks):
         node = index[item["path"]]
         data, complete = _content(result, reader, node)
         assert complete and hashlib.sha256(data).hexdigest() == item["sha256"], item["path"]
+
+
+def test_apfs_snapshot_view(disks, monkeypatch):
+    """Time Machine keeps each backup on an APFS disk as a snapshot. macOS doesn't let a script make
+    one on a test disk, so this presents the volume's current state as a snapshot: the snapshot
+    folder must hold the same files, byte for byte."""
+    if "apfs" not in disks:
+        pytest.skip("test disk not made yet")
+    from lifeboat.fs import apfs
+
+    def pretend(self, info):
+        where = self._resolve(self._omap(self.sb.omap_oid), self.sb.fs_oids[0], self.sb.xid)
+        info.snapshots.append(apfs.ApfsSnapshot(info.xid, "com.apple.TimeMachine.2026-10-11-120000.backup",
+                                                1_760_184_000.0, where[0]))
+
+    monkeypatch.setattr(apfs.ApfsVolume, "_find_snapshots", pretend)
+    image, manifest = disks["apfs"]
+    result, reader, _messages = _scan(image)
+    root = next(v.root for v in result.volumes if v.volume is not None)
+    assert root is not None
+    snapshots = next(c for c in root.children or [] if c.name == "Snapshots")
+    (snapshot,) = snapshots.children or []
+    assert snapshot.name.startswith("com.apple.TimeMachine.2026-10-11-120000.backup (")
+    index = {"/".join(n.path_parts()[3:]): n for n in snapshot.walk() if not n.flags & (F.DIR | F.STREAM)}
+    checked = 0
+    for item in manifest["files"]:
+        if item.get("deleted") or item.get("symlink"):
+            continue
+        node = index[item["path"]]
+        data, complete = _content(result, reader, node)
+        assert complete and hashlib.sha256(data).hexdigest() == item["sha256"], item["path"]
+        checked += 1
+    assert checked > 400

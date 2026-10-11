@@ -62,6 +62,7 @@ INCOMPAT_CASE_INSENSITIVE = 0x1
 INCOMPAT_SEALED = 0x20
 OMAP_VAL_DELETED, OMAP_VAL_ENCRYPTED = 0x1, 0x4
 XATTR_STREAM, XATTR_EMBEDDED = 0x1, 0x2
+OBJ_PHYSICAL = 0x40000000
 
 ROLES = {0: "", 1: "System", 2: "User", 4: "Recovery", 8: "VM", 0x10: "Preboot", 0x20: "Installer", 0x40: "Data",
          0x80: "Baseband", 0xC0: "Update", 0x100: "xART", 0x140: "Hardware", 0x180: "Backup", 0x200: "Enterprise",
@@ -338,6 +339,7 @@ class ApfsVolumeInfo:
     uuid: bytes
     files: int
     xid: int
+    physical_tree: bool = False                          # the file tree's links are block numbers
     inodes: dict[int, Inode] = field(default_factory=dict)
     extents: dict[int, list[tuple[int, int, int]]] = field(default_factory=dict)
     tree_nodes: set[int] = field(default_factory=set)
@@ -367,8 +369,9 @@ class ApfsVolumeInfo:
         name = block[704:960].split(b"\0", 1)[0].decode("utf-8", "replace")
         role = struct.unpack_from("<H", block, 964)[0]
         fext_tree = struct.unpack_from("<Q", block, 1032)[0] if len(block) >= 1040 else 0
+        tree_type = struct.unpack_from("<I", block, 116)[0]
         return cls(index, name, role, omap, root_tree, fext_tree, snap_tree, fs_flags, incompatible,
-                   bytes(block[240:256]), files, xid)
+                   bytes(block[240:256]), files, xid, bool(tree_type & OBJ_PHYSICAL))
 
 
 class ApfsRef:
@@ -597,12 +600,18 @@ class ApfsVolume(Volume):
     def _tree_leaves(self, omap: dict[int, list[tuple[int, int, int]]], root_oid: int, xid: int,
                      skip: set[int] | None = None, visited: set[int] | None = None,
                      progress: Callable[[Progress], None] | None = None,
-                     cache: dict[int, list[tuple[bytes, bytes]]] | None = None) -> list[list[tuple[bytes, bytes]]]:
-        """All leaf records of a virtual B-tree (a file-system tree), reading level by level.
-        Nodes whose block is in ``skip`` are not read (shared with a tree already loaded); parsed
-        leaves are kept in ``cache`` (snapshots share most of their nodes)."""
+                     cache: dict[int, list[tuple[bytes, bytes]]] | None = None,
+                     physical: bool = False) -> list[list[tuple[bytes, bytes]]]:
+        """All leaf records of a file-system tree, reading level by level. Its links are object ids
+        found through ``omap`` (or, for ``physical`` trees, block numbers). Nodes whose block is in
+        ``skip`` are not read (shared with a tree already loaded); parsed leaves are kept in
+        ``cache`` (snapshots share most of their nodes)."""
         cache = cache if cache is not None else {}
-        found = self._resolve(omap, root_oid, xid)
+
+        def locate(oid: int) -> tuple[int, int] | None:
+            return (oid, 0) if physical else self._resolve(omap, oid, xid)
+
+        found = locate(root_oid)
         if found is None:
             return []
         if found[1] & OMAP_VAL_ENCRYPTED:
@@ -642,7 +651,7 @@ class ApfsVolume(Volume):
                 for _key, value in entries:
                     if len(value) < 8:
                         continue
-                    child = self._resolve(omap, struct.unpack_from("<Q", value, 0)[0], xid)
+                    child = locate(struct.unpack_from("<Q", value, 0)[0])
                     if child is not None and not child[1] & OMAP_VAL_ENCRYPTED:
                         next_level.append(child[0])
             if progress is not None:
@@ -715,7 +724,8 @@ class ApfsVolume(Volume):
 
     def _load_volume(self, info: ApfsVolumeInfo, holder: Node, progress: Callable[[Progress], None] | None) -> None:
         omap = self._omap(info.omap)
-        leaves = self._tree_leaves(omap, info.root_tree, info.xid, visited=info.tree_nodes, progress=progress)
+        leaves = self._tree_leaves(omap, info.root_tree, info.xid, visited=info.tree_nodes, progress=progress,
+                                   physical=info.physical_tree)
         inodes, drecs, extents = self._records(leaves)
         if info.sealed and info.fext_tree:
             for entries in self._physical_leaves(info.fext_tree):
@@ -868,7 +878,8 @@ class ApfsVolume(Volume):
                 current = by_uuid.get(vol.uuid) if vol is not None else None
                 if vol is None or current is None:
                     continue
-                leaves = self._tree_leaves(self._omap(vol.omap), vol.root_tree, old.xid, skip=current.tree_nodes)
+                leaves = self._tree_leaves(self._omap(vol.omap), vol.root_tree, old.xid, skip=current.tree_nodes,
+                                           physical=vol.physical_tree)
                 inodes, drecs, extents = self._records(leaves)
                 into = found_inodes.setdefault(vol.uuid, {})
                 for ino, inode in inodes.items():
@@ -1050,10 +1061,11 @@ class ApfsVolume(Volume):
                 continue
             if progress is not None:
                 progress(Progress(f"Reading snapshot '{snap.name}'"))
-            leaves = self._tree_leaves(omap, vol.root_tree, snap.xid, cache=cache)
+            leaves = self._tree_leaves(omap, vol.root_tree, snap.xid, cache=cache, physical=vol.physical_tree)
             inodes, drecs, extents = self._records(leaves)
             view = ApfsVolumeInfo(vol.index, vol.name, vol.role, info.omap, vol.root_tree, 0, 0, vol.fs_flags,
-                                  vol.incompatible, vol.uuid, vol.files, snap.xid, inodes, extents)
+                                  vol.incompatible, vol.uuid, vol.files, snap.xid, vol.physical_tree,
+                                  inodes=inodes, extents=extents)
             self._build(view, node, inodes, drecs, deleted=False)
             budget -= len(inodes)
             shown += 1
