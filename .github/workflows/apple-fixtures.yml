@@ -1,0 +1,49 @@
+name: Make Mac test disks
+
+# The unit tests read HFS+ and APFS disks that only macOS can write. When the script that makes
+# them changes, a Mac makes them again and commits them (the commit skips the other workflows).
+on:
+  push:
+    paths:
+      - tests/macos/make_fixtures.py
+      - .github/workflows/apple-fixtures.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fixtures:
+    name: Make HFS+ and APFS test disks with macOS
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: afsctool (to choose how macOS compresses the test files)
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: brew install afsctool || echo "afsctool is not available; ditto compresses instead"
+      - name: Make the disks
+        run: sudo -E env "PATH=$PATH" "$(which python)" tests/macos/make_fixtures.py tests/fixtures/apple
+      - name: Commit them
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" tests/fixtures/apple
+          ls -l tests/fixtures/apple
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/fixtures/apple
+          git commit -m "Mac test disks, made by macOS $(sw_vers -productVersion) [skip ci]" || exit 0
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin "$GITHUB_REF_NAME" && git push origin "HEAD:$GITHUB_REF_NAME" && exit 0
+            sleep $((attempt * 5))
+          done
+          exit 1
