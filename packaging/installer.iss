@@ -1,8 +1,8 @@
 ; Inno Setup script for Lifeboat Data Recovery.
-; Build after PyInstaller:  ISCC /DAppVersion=1.1.0 /DAppBuild=19 packaging\installer.iss
+; Build after PyInstaller:  ISCC /DAppVersion=1.2.0 /DAppBuild=19 packaging\installer.iss
 
 #ifndef AppVersion
-  #define AppVersion "1.1.0"
+  #define AppVersion "1.2.0"
 #endif
 #ifdef AppBuild
   #define FileTag AppVersion + "-build" + AppBuild

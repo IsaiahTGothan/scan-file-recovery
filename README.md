@@ -38,12 +38,12 @@ Every push to this repository builds and tests Lifeboat on Windows and on Macs (
 
 1. Open the repository's **Actions** tab, then the latest successful **Build and test** run.
 2. Under **Artifacts**, download **Lifeboat-Windows**. It contains:
-   * `Lifeboat-Setup-1.1.0-build19.exe`: the installer (Start menu entry, optional desktop icon, uninstaller).
-   * `Lifeboat-1.1.0-build19-portable.zip`: the same app with no installation. Unzip it and run `Lifeboat.exe`.
+   * `Lifeboat-Setup-1.2.0-build19.exe`: the installer (Start menu entry, optional desktop icon, uninstaller).
+   * `Lifeboat-1.2.0-build19-portable.zip`: the same app with no installation. Unzip it and run `Lifeboat.exe`.
 
    The build number (19 here) is the number of the Actions run. The About box shows it too, so you can always tell which build is installed.
 
-Pushing a version tag (for example `v1.1.0`) also publishes both files as a GitHub Release.
+Pushing a version tag (for example `v1.2.0`) also publishes both files as a GitHub Release.
 
 Lifeboat asks for **administrator rights** when it starts (the UAC prompt). Windows only allows direct disk access to administrators. Because the app isn't code-signed yet, SmartScreen may say "Windows protected your PC". Click **More info → Run anyway**.
 
@@ -139,12 +139,12 @@ Lifeboat makes problems impossible to miss:
 
 | | |
 |---|---|
-| Partition tables | MBR (including extended/logical partitions), GPT (with automatic fallback to the backup GPT), drives with no partition table |
-| Filesystems | **NTFS** (deleted files and folders, compressed, sparse, alternate data streams, hard links, damaged MFT areas, backup boot sector, $MFTMirr), **exFAT**, **FAT32 / FAT16 / FAT12** (long names, including on deleted entries; second FAT copy used when the first is damaged) |
-| Deep scan | Lost and deleted NTFS/exFAT/FAT partitions (also via their backup boot sectors) and files by signature: JPEG, PNG, GIF, BMP, TIFF, Canon CR2/CR3, Nikon NEF, Sony ARW, Olympus ORF, Pentax PEF, DNG, HEIC/AVIF, PSD, MP4, MOV, M4A, 3GP, AVI, WAV, WebP, MKV/WebM, MP3, OGG, PDF, DOCX/XLSX/PPTX, ODT/ODS, EPUB, ZIP, DOC/XLS/PPT/MSG, 7-Zip, RAR, SQLite, Outlook PST |
+| Partition tables | MBR (including extended/logical partitions), GPT (with automatic fallback to the backup GPT), Apple Partition Map, drives with no partition table |
+| Filesystems | **NTFS** (deleted files and folders, compressed, sparse, alternate data streams, hard links, damaged MFT areas, backup boot sector, $MFTMirr), **exFAT**, **FAT32 / FAT16 / FAT12** (long names, including on deleted entries; second FAT copy used when the first is damaged), **Mac HFS+** (Mac OS Extended, journaled and case-sensitive too: deleted files and folders from the journal and unused catalog nodes, files macOS compressed, hard links, Time Machine folder links, resource forks, unfinished journal changes applied in memory, backup volume header), **Mac APFS** (every volume of the container, compressed, sparse and cloned files, hard links, snapshots, recently deleted files from older checkpoints, newest valid checkpoint when the superblock is damaged) |
+| Deep scan | Lost and deleted NTFS/exFAT/FAT/HFS+ partitions (also via their backup boot sectors and volume headers), deleted APFS files with their names and folders (from the old file-tree pages APFS leaves in free space), and files by signature: JPEG, PNG, GIF, BMP, TIFF, Canon CR2/CR3, Nikon NEF, Sony ARW, Olympus ORF, Pentax PEF, DNG, HEIC/AVIF, PSD, MP4, MOV, M4A, 3GP, AVI, WAV, WebP, MKV/WebM, MP3, OGG, PDF, DOCX/XLSX/PPTX, ODT/ODS, EPUB, ZIP, DOC/XLS/PPT/MSG, 7-Zip, RAR, SQLite, Outlook PST |
 | Sources | Physical drives, drive letters (volumes), disk images (`.img`, `.dd`, `.raw`, `.bin`, `.iso`, split `.001/.002...`, fixed-size `.vhd`) |
 
-Not supported yet: browsing Mac (HFS+, APFS), Linux (ext2/3/4) and ReFS filesystems. Deep scan still recovers common file types from them by signature. Windows EFS-encrypted files can't be decrypted without the original user's key, and Windows system files compressed with "CompactOS" (WOF) are listed but skipped.
+Not supported yet: Linux (ext2/3/4) and ReFS filesystems (deep scan still recovers common file types from them by signature), and encrypted APFS volumes (FileVault, "APFS (Encrypted)", encrypted Time Machine backups): Lifeboat detects them and explains how to unlock them on a Mac. A Mac's internal SSD (T2 and Apple silicon) is encrypted by the Mac's own chip and can't be read anywhere else. Windows EFS-encrypted files can't be decrypted without the original user's key, and Windows system files compressed with "CompactOS" (WOF) are listed but skipped.
 
 ## Command line
 
@@ -177,14 +177,16 @@ python -m pytest -q                     # tests (the filesystem-image tests need
 python packaging/stamp_build.py         # optional: build number and commit for the About box
 python packaging/make_icon.py           # icon and installer images
 pyinstaller packaging/lifeboat.spec --noconfirm       # Windows: Lifeboat.exe + lifeboat-cli.exe
-ISCC /DAppVersion=1.1.0 packaging\installer.iss    # Windows installer (Inno Setup 6)
+ISCC /DAppVersion=1.2.0 packaging\installer.iss    # Windows installer (Inno Setup 6)
 pyinstaller packaging/lifeboat_mac.spec --noconfirm   # Mac: Lifeboat.app (with lifeboat-cli inside)
 ```
+
+Mac filesystems are tested on real disks made by macOS: a workflow (`.github/workflows/apple-fixtures.yml`) runs `tests/macos/make_fixtures.py` on a Mac whenever that script changes and commits the gzipped disks to `tests/fixtures/apple`. They hold compressed files, hard links, a Time Machine-style folder link, a file in dozens of pieces, a sparse file, accented, Japanese and emoji names, and deleted files and folders.
 
 The test suite builds real NTFS, FAT12/16/32 and exFAT images with the reference Linux tools (`mkntfs`/`ntfs-3g`, `mkfs.vfat`/`mtools`, `mkfs.exfat`/`exfat-fuse`, `sfdisk`, `sgdisk`). It needs those tools and root for FUSE mounts. CI runs:
 
 * **Linux:** lint (ruff), type checking (mypy), and the full suite. That covers byte-for-byte recovery of live, deleted, fragmented, compressed and sparse files; damaged GPT, boot sectors, MFT and FAT; simulated bad, flaky, slow and hanging sectors; disconnects; a genuinely full destination; stop-and-resume; carving of 20 file types; 200 random-corruption cases; and the GUI.
-* **Mac (Apple Silicon and Intel):** the unit tests, then **real FAT32 and exFAT disks made by macOS** (`hdiutil`, files written and deleted through macOS's own drivers), attached read-only and recovered byte for byte through the raw device, by the Python package and by the `lifeboat-cli` inside the app. Then it builds `Lifeboat.app`, smoke-tests it, and packages the `.dmg` and `.zip`.
+* **Mac (Apple Silicon and Intel):** the unit tests, then **real FAT32, exFAT, HFS+ and APFS disks made by macOS** (`hdiutil`, files written and deleted through macOS's own drivers), attached read-only and recovered byte for byte through the raw device, by the Python package and by the `lifeboat-cli` inside the app. Then it builds `Lifeboat.app`, smoke-tests it, and packages the `.dmg` and `.zip`.
 * **Windows:** the unit tests, then an end-to-end test on a **real NTFS disk** (a VHDX created and formatted by Windows). It recovers every file, including deleted ones, compressed ones and paths longer than 260 characters, through the raw disk, the drive letter, and the packaged `lifeboat-cli.exe`. Then it builds and smoke-tests `Lifeboat.exe`, and packages the installer and portable zip.
 
 ## How it works
@@ -194,7 +196,8 @@ device/    read-only access: Windows raw disks and volumes (overlapped I/O with
            timeouts and cancellation), Linux block devices, image files
 rescue/    the sector map (good / skipped / failed / bad, ddrescue compatible) and
            the rescue reader: FAST -> SWEEP -> TRIM -> SCRAPE -> RETRY passes
-fs/        MBR/GPT, NTFS, FAT, exFAT, LZNT1 decompression, signature carving
+fs/        MBR/GPT/Apple Partition Map, NTFS, FAT, exFAT, HFS+, APFS, LZNT1 and
+           Apple (zlib/LZVN/LZFSE) decompression, signature carving
 scan/      quick and deep scans, one browsable tree
 recover/   planning, safe names, verified copying, rescue passes, journal, reports
 imaging/   sector-by-sector imaging with a resumable map

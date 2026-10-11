@@ -9,11 +9,6 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 - **Fix:** save every scan automatically (per drive, in the app data folder) and offer **Reopen last scan of this drive** when that drive is selected. An interrupted deep scan should continue where it stopped instead of starting over.
 - **Workaround:** keep the window open until every recovery from that scan is finished.
 
-### 4. Mac drives (HFS+) can't be browsed (high for Mac drives)
-- **What happens:** HFS+ partitions show as "HFS+, not readable". Only signature search finds files, which loses every name and folder (files come out as `JPG_00012345678.jpg`) and can break fragmented files, large videos especially.
-- **Fix:** read HFS+ itself (catalog and extents B-trees) to list live files with names, folders and dates; then deleted files where possible; then APFS.
-- **Workaround:** copy the files on a Mac, or with a read-only HFS+ reader on Windows such as HFSExplorer.
-
 ### 8. Verification doesn't overlap with copying (low, speed)
 - **What happens:** each file is copied and then read back before the next file starts. On hard-drive destinations this adds a lot of time.
 - **Fix:** verify the previous file while the next one is being copied.
@@ -38,9 +33,15 @@ Found while using Lifeboat on a real recovery: a 5 TB Seagate Portable formatted
 - Not code-signed: Windows SmartScreen warns on first run. The Mac app isn't notarized by Apple: macOS blocks the first start until you click **Open Anyway** (System Settings → Privacy & Security).
 - Not yet tested on a physically failing drive. Tested only with simulated failures and healthy real disks.
 - The Mac version is tested on GitHub's Macs (Apple Silicon and Intel) with disk images that macOS itself formats and attaches as disks, not yet on a person's Mac with a USB drive. Its drive list doesn't read serial numbers yet, so a reconnected drive is recognised by its name and size.
-- Can't browse APFS, ext2/3/4 or ReFS (signature search still works on them).
+- Can't browse ext2/3/4 or ReFS (signature search still works on them).
+- Encrypted APFS volumes (FileVault, "APFS (Encrypted)", encrypted Time Machine backups) are detected but can't be read: unlock the drive on a Mac first. A Mac's internal SSD (T2 and Apple silicon) can only be read by that Mac.
+- APFS snapshots (each Time Machine backup on an APFS disk is one) are read as Apple documents them, but no real Time Machine disk has been tested yet: macOS doesn't let a script make snapshots of a test disk.
+- On HFS+ without a journal (rare; journaling is the default), deleted files can only be found by signature, without names.
 - Windows EFS-encrypted files can't be decrypted. Windows system files compressed with CompactOS (WOF) are skipped.
 - Physical damage (clicking, not spinning up, not detected) needs a clean-room lab.
+
+## Fixed on October 11, 2026 (version 1.2.0)
+- **4. Mac drives (HFS+, APFS) couldn't be browsed.** Lifeboat now reads HFS+ (Mac OS Extended, journaled and case-sensitive) and APFS, on GPT, Apple Partition Map or unpartitioned drives: names, folders and dates, files macOS compressed, hard links, Time Machine folder links, sparse and cloned files, every volume of an APFS container. Deleted files come back with their names: on HFS+ from the journal and unused catalog nodes, on APFS from older checkpoints and, with Deep Scan, from the old file-tree pages APFS leaves in free space. A drive unplugged without ejecting has its unfinished HFS+ journal applied in memory (never on the drive), and damaged volume headers and superblocks fall back to their copies. Tested on real disks made by macOS: every file byte for byte, and every deleted file either recovered exactly or flagged as overwritten.
 
 ## Fixed on October 11, 2026 (version 1.1.0)
 - **1. No way to continue on another drive when the destination fills up.** The Recover window now offers **Tick only what fits here** when the destination is too small: it keeps ticked, in disk order, the files that fit, and opens the Recover window again. When the recovery ends (or is stopped because the drive filled up), the summary offers **Recover the rest…**, which ticks exactly the files not recovered yet so they can go to another drive. A running recovery still can't switch drives by itself: press Stop, then Recover the rest.

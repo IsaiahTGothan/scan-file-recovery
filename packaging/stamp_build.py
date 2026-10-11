@@ -1,7 +1,7 @@
 """Record which build this is (CI run number, commit, date) in lifeboat/_build.py.
 
 Run before packaging. The About box, `lifeboat-cli --version`, the log and the
-recovery reports then show for example "1.1.0 (build 19, a8fa2e7)", so two
+recovery reports then show for example "1.2.0 (build 19, a8fa2e7)", so two
 copies of Lifeboat can always be told apart.
 """
 

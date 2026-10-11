@@ -32,6 +32,7 @@ from ..errors import (
     DeviceHungError,
 )
 from ..events import EventBus, InterventionHandler, JobControl, Progress, RateMeter
+from ..fs.apfs import NxSuperblock, container_starts_at
 from ..fs.carving import Carver
 from ..fs.detect import Probe, mount, probe
 from ..fs.exfat import ExfatBoot
@@ -222,11 +223,15 @@ class Scanner:
         meter = RateMeter()
         last = 0.0
         self.reader.reset_skipping()
+        # Filesystems that look for traces of deleted files in the whole drive (APFS).
+        feeders = [vr for vr in result.volumes if vr.volume is not None and hasattr(vr.volume, "deep_feed")]
         while pos < size:
             self.control.check()
             length = min(chunk, size - pos)
             outcome = self._retry(partial(self.reader.read, pos, length, ReadMode.FAST), "searching the drive")
             data = bytes(outcome.data)
+            for vr in feeders:
+                vr.volume.deep_feed(pos, data)  # type: ignore[union-attr]
             if self.options.find_partitions:
                 self._find_boot_sectors(pos, data, candidates)
             if carver is not None:
@@ -241,6 +246,10 @@ class Scanner:
                     item=f"{carver.count if carver else 0:,} files found by signature, "
                          f"{len(candidates)} partition candidates",
                 ))
+        for vr in feeders:
+            added = vr.volume.deep_finish(self.progress)  # type: ignore[union-attr]
+            if added:
+                self.events.info(f"Deep scan found {added:,} more deleted files in {vr.title}.")
         if self.options.find_partitions:
             self._add_found_partitions(result, candidates, known)
         if carver is not None and carver.count:
@@ -268,6 +277,13 @@ class Scanner:
                     sector = data[start:start + 512]
                     self._consider_boot(base + start, sector, out)
                 index = data.find(magic, index + 1)
+        # APFS container superblocks (block 0 of a container holds the newest one).
+        index = data.find(b"NXSB")
+        while index >= 0:
+            start = index - 32
+            if start >= 0 and (base + start) % 512 == 0:
+                self._consider_apfs(base + start, data[start:start + 65536], out)
+            index = data.find(b"NXSB", index + 1)
         # Mac HFS+ volume headers: 1 KiB into the volume, and a copy 1 KiB before its end.
         for magic in (b"H+\x00\x04", b"HX\x00\x05"):
             index = data.find(magic)
@@ -289,6 +305,27 @@ class Scanner:
             if header is not None and self._hfs_valid(header):
                 header.used_backup = backup
                 out[start] = Probe("HFS+", True, header, used_backup=backup)
+
+    def _consider_apfs(self, at: int, block: bytes, out: dict[int, Probe]) -> None:
+        """A container superblock at ``at``: block 0 of a container, or a copy in its checkpoint area."""
+        if len(block) < 4096:
+            return
+        size = int.from_bytes(block[36:40], "little")
+        if size > len(block):
+            block = bytes(self.reader.read(at, size).data) if 4096 <= size <= 65536 else b""
+        sb = NxSuperblock.parse(block, at)
+        if sb is None:
+            return
+        starts = [at] + [at - k * sb.block_size for k in range(sb.desc_base, sb.desc_base + min(sb.desc_blocks, 512))]
+        for start in starts:
+            if start < 0 or start in out:
+                continue
+            sb.start = start
+            fits = start + sb.volume_size <= self.reader.size + sb.block_size
+            if fits and container_starts_at(self.reader, start, sb):
+                sb.used_backup = start != at
+                out[start] = Probe("APFS", True, sb, used_backup=start != at)
+                return
 
     def _hfs_valid(self, header: HfsHeader) -> bool:
         """The catalog's first node is a B-tree header node with a sane node size."""
@@ -348,7 +385,7 @@ class Scanner:
                 continue
             found = candidates[start]
             boot = found.boot
-            if isinstance(boot, NtfsBoot | ExfatBoot | FatBoot | HfsHeader):
+            if isinstance(boot, NtfsBoot | ExfatBoot | FatBoot | HfsHeader | NxSuperblock):
                 size = boot.volume_size
             else:
                 continue

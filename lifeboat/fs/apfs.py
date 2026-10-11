@@ -138,18 +138,20 @@ class NxSuperblock:
                    bytes(block[72:88]), (keylocker[0], keylocker[1]))
 
 
-def find_superblock(reader: RescueReader, offset: int, head: bytes) -> NxSuperblock | None:
+def find_superblock(reader: RescueReader, offset: int, head: bytes, search: bool = True) -> NxSuperblock | None:
     """The container superblock in block 0 or, when block 0 is damaged, the newest valid one in the
-    checkpoint area right after it."""
-    if head[32:36] != b"NXSB":
+    checkpoint area right after it (``search``: also when block 0 doesn't look like APFS at all)."""
+    stale = None
+    if head[32:36] == b"NXSB":
+        block_size = struct.unpack_from("<I", head, 36)[0]
+        if 4096 <= block_size <= 65536 and len(head) < block_size and offset + block_size <= reader.size:
+            head = bytes(reader.read_critical(offset, block_size).data)
+        found = NxSuperblock.parse(head, offset)
+        if found is not None:
+            return found
+        stale = NxSuperblock.parse(head, offset, verify=False)
+    elif not search:
         return None
-    block_size = struct.unpack_from("<I", head, 36)[0]
-    if 4096 <= block_size <= 65536 and len(head) < block_size and offset + block_size <= reader.size:
-        head = bytes(reader.read_critical(offset, block_size).data)
-    found = NxSuperblock.parse(head, offset)
-    if found is not None:
-        return found
-    stale = NxSuperblock.parse(head, offset, verify=False)
     best = None
     if stale is not None and 0 < stale.desc_base < 1 << 20 and 0 < stale.desc_blocks <= 4096:
         best = _newest_in_area(reader, offset, stale.block_size, stale.desc_base, stale.desc_blocks)
@@ -164,9 +166,22 @@ def find_superblock(reader: RescueReader, offset: int, head: bytes) -> NxSuperbl
             candidate = NxSuperblock.parse(area[pos:pos + size], offset) if size <= len(area) - pos else None
             if candidate is not None and (best is None or candidate.xid > best.xid):
                 best = candidate
+        if best is not None and stale is None and not container_starts_at(reader, offset, best):
+            return None
     if best is not None:
         best.used_backup = True
     return best
+
+
+def container_starts_at(reader: RescueReader, start: int, sb: NxSuperblock) -> bool:
+    """Whether a container described by ``sb`` really starts at ``start``: its object map, a physical
+    object, must be at the block number the superblock gives."""
+    at = start + sb.omap_oid * sb.block_size
+    if at + sb.block_size > reader.size:
+        return False
+    block = bytes(reader.read(at, sb.block_size).data)
+    oid, _xid, otype, _sub = object_header(block)
+    return otype == T_OMAP and oid == sb.omap_oid and checksum_ok(block)
 
 
 def _newest_in_area(reader: RescueReader, offset: int, block_size: int, base: int, count: int
@@ -865,29 +880,39 @@ class ApfsVolume(Volume):
                 for private_id, items in extents.items():
                     ext_into.setdefault(private_id, items)
         for uuid, inodes in found_inodes.items():
-            info = by_uuid[uuid]
-            if not inodes:
-                continue
-            for private_id, items in found_extents.get(uuid, {}).items():
-                if private_id not in info.extents:
-                    info.extents[private_id] = items
-            for inode in inodes.values():
-                inode.deleted = True
-                info.inodes.setdefault(inode.oid, inode)
-            seen: set[tuple[int, str]] = set()
-            drecs = []
-            for d in found_drecs.get(uuid, []):
-                if (d[2], d[1]) not in seen and d[2] in inodes:
-                    seen.add((d[2], d[1]))
-                    drecs.append(d)
-            holder = self._holders[id(info)]
-            self._build(info, holder, inodes, drecs, deleted=True, existing=self._folder_index(holder))
-            for node in holder.walk():
-                if node.flags & F.DELETED and not node.flags & F.DIR:
-                    self.deleted_found += 1
-                    ref = node.ref
-                    if isinstance(ref, ApfsRef) and node.size and self._overwritten(ref):
-                        node.flags |= F.OVERWRITTEN
+            self._attach_deleted(by_uuid[uuid], inodes, found_drecs.get(uuid, []), found_extents.get(uuid, {}))
+
+    def _attach_deleted(self, info: ApfsVolumeInfo, inodes: dict[int, Inode], drecs: list[tuple[int, str, int, int]],
+                        extents: dict[int, list[tuple[int, int, int]]]) -> int:
+        """Show deleted files (inodes the live tree no longer has) in their folders; return how many."""
+        inodes = {ino: inode for ino, inode in inodes.items() if ino not in info.inodes and ino >= FIRST_USER_ID}
+        if not inodes:
+            return 0
+        for private_id, items in extents.items():
+            if private_id not in info.extents:
+                info.extents[private_id] = items
+        for inode in inodes.values():
+            inode.deleted = True
+            info.inodes[inode.oid] = inode
+        seen: set[tuple[int, str]] = set()
+        named = []
+        for d in drecs:
+            if d[2] in inodes and (d[2], d[1]) not in seen:
+                seen.add((d[2], d[1]))
+                named.append(d)
+        holder = self._holders[id(info)]
+        self._build(info, holder, inodes, named, deleted=True, existing=self._folder_index(holder))
+        self._used_blocks = None
+        added = 0
+        for node in holder.walk():
+            ref = node.ref
+            if (node.flags & F.DELETED and not node.flags & F.DIR and isinstance(ref, ApfsRef)
+                    and ref.inode.oid in inodes):
+                added += 1
+                if node.size and self._overwritten(ref):
+                    node.flags |= F.OVERWRITTEN
+        self.deleted_found += added
+        return added
 
     def _folder_index(self, holder: Node) -> dict[int, Node]:
         out: dict[int, Node] = {ROOT_DIR: holder}
@@ -923,6 +948,68 @@ class ApfsVolume(Volume):
             if i >= 0 and self._used_blocks[i][1] > phys:
                 return True
         return False
+
+    # ------------------------------------------------------------- deep scan
+    _NODE_TAGS = (struct.pack("<II", T_BTREE_NODE, T_FSTREE), struct.pack("<II", T_BTREE, T_FSTREE))
+
+    def deep_feed(self, offset: int, data: bytes) -> None:
+        """Deep Scan hands over every piece of the drive: keep the old file-tree nodes (copies APFS
+        left behind when it changed them) found in this container's free space."""
+        if not hasattr(self, "_orphans"):
+            self._orphans: list[tuple[int, list[tuple[bytes, bytes]]]] = []
+            self._live_nodes = {p for info in self.volumes for p in info.tree_nodes}
+        bs = self.block_size
+        end = self.offset + self.size
+        if offset + len(data) <= self.offset or offset >= end:
+            return
+        for tag in self._NODE_TAGS:
+            index = data.find(tag)
+            while index >= 0:
+                pos = index - 24
+                absolute = offset + pos
+                if (absolute - self.offset) % bs == 0 and self.offset <= absolute < end:
+                    block = data[pos:pos + bs] if pos >= 0 else b""
+                    if len(block) < bs:          # the node straddles two pieces of the scan
+                        block = bytes(self.reader.read(absolute, bs, ReadMode.FAST).data)
+                    self._consider_orphan(absolute, block)
+                index = data.find(tag, index + 1)
+
+    def _consider_orphan(self, absolute: int, block: bytes) -> None:
+        paddr = (absolute - self.offset) // self.block_size
+        if len(block) != self.block_size or paddr in self._live_nodes:
+            return
+        if struct.unpack_from("<H", block, 34)[0] != 0 or not checksum_ok(block):
+            return
+        parsed = node_entries(block)
+        if parsed is not None and parsed[2]:
+            self._orphans.append((object_header(block)[1], parsed[2]))
+
+    def deep_finish(self, progress: Callable[[Progress], None] | None = None) -> int:
+        """After Deep Scan: rebuild the deleted files the old nodes describe. Returns how many."""
+        orphans = getattr(self, "_orphans", [])
+        readable = [v for v in self.volumes if not v.encrypted]
+        if not orphans or len(readable) != 1:
+            return 0
+        if progress is not None:
+            progress(Progress("Rebuilding deleted APFS files"))
+        info = readable[0]
+        inodes: dict[int, Inode] = {}
+        drecs: set[tuple[int, str, int, int]] = set()
+        pieces: dict[tuple[int, int], tuple[int, int]] = {}
+        for _xid, entries in sorted(orphans, key=lambda item: item[0]):
+            found_inodes, found_drecs, found_extents = self._records([entries])
+            for ino, inode in found_inodes.items():
+                if ino not in info.inodes:
+                    inodes[ino] = inode
+            drecs.update(found_drecs)
+            for private_id, items in found_extents.items():
+                for logical, length, phys in items:
+                    pieces[(private_id, logical)] = (length, phys)
+        extents: dict[int, list[tuple[int, int, int]]] = {}
+        for (private_id, logical), (length, phys) in sorted(pieces.items()):
+            extents.setdefault(private_id, []).append((logical, length, phys))
+        self._orphans = []
+        return self._attach_deleted(info, inodes, sorted(drecs), extents)
 
     # ------------------------------------------------------------- snapshots
     def _find_snapshots(self, info: ApfsVolumeInfo) -> None:

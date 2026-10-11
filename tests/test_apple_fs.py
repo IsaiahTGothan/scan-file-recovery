@@ -172,3 +172,55 @@ def test_apfs_damaged_superblock_uses_checkpoint(disks, tmp_path):
     assert volume.kind == "APFS"
     assert any("checkpoint" in m for m in messages)
     assert sum(1 for _ in result.root.files()) > 400
+
+
+def test_apfs_deep_scan_finds_deleted_files(disks):
+    """Deep Scan rebuilds deleted APFS files from the old tree nodes APFS leaves in free space."""
+    if "apfs" not in disks:
+        pytest.skip("test disk not made yet")
+    image, manifest = disks["apfs"]
+    device = ImageDevice(str(image))
+    reader = RescueReader(device, ReadPolicy(timeout=5))
+    from lifeboat.scan.scanner import ScanOptions
+
+    result = Scanner(reader, device.info, options=ScanOptions(carve=False)).deep_scan()
+    index = _index(result.root)
+    wanted = [f for f in manifest["files"] if f.get("deleted")]
+    found = exact = 0
+    for item in wanted:
+        nodes = [n for n in index.get(unicodedata.normalize("NFC", item["path"]), []) if n.flags & F.DELETED]
+        if not nodes:
+            continue
+        found += 1
+        data, complete = _content(result, reader, nodes[0])
+        if complete and hashlib.sha256(data).hexdigest() == item["sha256"]:
+            exact += 1
+        else:
+            assert nodes[0].flags & F.OVERWRITTEN, item["path"]
+    assert found >= len(wanted) - 2 and exact >= len(wanted) - 4, (found, exact, len(wanted))
+
+
+@pytest.mark.parametrize("name", ["hfsplus", "apfs"])
+def test_wiped_start_of_drive(disks, tmp_path, name):
+    """The first 40 KB wiped (partition table and the start of the volume): a normal scan rebuilds
+    from the backup GPT and the volume's copies; with the backup GPT gone too, Deep Scan finds it."""
+    if name not in disks:
+        pytest.skip("test disk not made yet")
+    image = tmp_path / f"{name}.img"
+    shutil.copy(disks[name][0], image)
+    with open(image, "r+b") as fh:
+        fh.write(bytes(40960))
+    result, _reader, _messages = _scan(image)
+    assert sum(1 for _ in result.root.files()) > 400
+    size = image.stat().st_size
+    with open(image, "r+b") as fh:            # the backup GPT: the last 34 sectors
+        fh.seek(size - 34 * 512)
+        fh.write(bytes(34 * 512))
+    device = ImageDevice(str(image))
+    from lifeboat.scan.scanner import ScanOptions
+
+    result = Scanner(RescueReader(device, ReadPolicy(timeout=5)), device.info,
+                     options=ScanOptions(carve=False)).deep_scan()
+    lost = [v for v in result.volumes if v.found_by_deep_scan and v.volume is not None]
+    assert lost and lost[0].volume.kind == ("APFS" if name == "apfs" else "HFS+")
+    assert sum(1 for _ in result.root.files()) > 400

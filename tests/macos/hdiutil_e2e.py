@@ -2,9 +2,9 @@
 
 Steps (each a sub-command so CI logs show exactly where something failed):
 
-  create      make FAT32 and exFAT disk images with hdiutil, write test files with macOS's own
-              filesystem drivers, delete some, then attach each image read-only as a disk
-              (/dev/diskN) without mounting it
+  create      make FAT32, exFAT, HFS+ and APFS disk images with hdiutil, write test files with
+              macOS's own filesystem drivers, delete some, then attach each image read-only as a
+              disk (/dev/diskN) without mounting it
   verify-api  as root: find the disks with Lifeboat's macOS drive list and Drive check, read them
               through /dev/rdiskN, recover everything and compare every byte
   verify-cli  the same through the bundled lifeboat-cli (Lifeboat.app/Contents/MacOS)
@@ -30,7 +30,12 @@ sys.path.insert(0, str(ROOT))
 
 WORK = Path(os.environ.get("LIFEBOAT_E2E_DIR", "/tmp/lifeboat-e2e"))
 STATE = WORK / "state.json"
-FORMATS = {"fat32": ("MS-DOS FAT32", "LBFAT32"), "exfat": ("ExFAT", "LBEXFAT")}
+FORMATS = {
+    "fat32": ("MS-DOS FAT32", "LBFAT32", "MBRSPUD"),
+    "exfat": ("ExFAT", "LBEXFAT", "MBRSPUD"),
+    "hfs": ("Journaled HFS+", "LBHFSJ", "GPTSPUD"),
+    "apfs": ("APFS", "LBAPFSE", "GPTSPUD"),
+}
 MiB = 1 << 20
 
 
@@ -56,7 +61,9 @@ def attach(image: Path, mount: bool) -> tuple[str, str]:
     args += ["-nobrowse"] if mount else ["-readonly", "-nomount"]
     out = subprocess.run(args, capture_output=True, check=True).stdout
     entities = plistlib.loads(out)["system-entities"]
-    disk = min((e["dev-entry"] for e in entities), key=len)
+    # The image's own disk: an APFS container made from it gets a higher disk number.
+    whole = [e["dev-entry"] for e in entities if e["dev-entry"][len("/dev/disk"):].isdigit()]
+    disk = min(whole, key=lambda dev: int(dev[len("/dev/disk"):]))
     mounts = [e.get("mount-point", "") for e in entities if e.get("mount-point")]
     return disk, mounts[0] if mounts else ""
 
@@ -65,9 +72,9 @@ def cmd_create() -> None:
     shutil.rmtree(WORK, ignore_errors=True)
     WORK.mkdir(parents=True)
     state: dict = {}
-    for name, (fs, label) in FORMATS.items():
+    for name, (fs, label, layout) in FORMATS.items():
         image = WORK / f"{name}.dmg"
-        run(["hdiutil", "create", "-size", "128m", "-fs", fs, "-volname", label, "-layout", "MBRSPUD", str(image)])
+        run(["hdiutil", "create", "-size", "128m", "-fs", fs, "-volname", label, "-layout", layout, str(image)])
         disk, mount = attach(image, mount=True)
         manifest: dict[str, dict] = {}
         files = {
@@ -135,6 +142,7 @@ def cmd_verify_api() -> None:
     from lifeboat.recover.destination import disks_for_path, disks_for_source
     from lifeboat.rescue.reader import ReadPolicy, RescueReader
     from lifeboat.scan import Scanner
+    from lifeboat.scan.scanner import ScanOptions
 
     assert is_admin(), "run as root (sudo)"
     state = _state()
@@ -175,6 +183,9 @@ def cmd_verify_api() -> None:
         assert device.size == disk.size and device.is_present()
         reader = RescueReader(device, ReadPolicy(timeout=10), events=bus)
         result = Scanner(reader, device.info, bus).quick_scan()
+        if name == "apfs":
+            # APFS keeps only the last few checkpoints; Deep Scan finds older deletions too.
+            result = Scanner(reader, device.info, bus, options=ScanOptions(carve=False)).deep_scan(result)
         volumes = [v for v in result.volumes if v.volume is not None]
         print(f"{name}: {[v.title for v in result.volumes]}", flush=True)
         assert len(volumes) == 1, result.volumes
