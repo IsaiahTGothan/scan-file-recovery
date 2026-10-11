@@ -56,6 +56,8 @@ Requirements: Windows 10 or 11, 64-bit.
 3. **First start:** the app isn't notarized by Apple yet, so macOS blocks it the first time. Open **System Settings → Privacy & Security**, scroll down to the message about Lifeboat and click **Open Anyway**. (If macOS says the app "is damaged", run `xattr -dr com.apple.quarantine /Applications/Lifeboat.app` in Terminal, then open it again.)
 4. Lifeboat offers to **restart with administrator rights**: macOS asks for your password. Only administrators may read drives directly, on a Mac too. If macOS still refuses to let Lifeboat read a drive, allow Lifeboat under **System Settings → Privacy & Security → Full Disk Access**.
 
+Requirements: macOS 14 (Sonoma) or later.
+
 On a Mac, Lifeboat lists every physical drive (and attached disk images) with its name, size and connection, reads through the raw device (`/dev/rdiskN`), and has the same Drive check. The command line tool is inside the app: `sudo /Applications/Lifeboat.app/Contents/MacOS/lifeboat-cli devices`.
 
 Mac tips: if macOS says "The disk you attached was not readable by this computer", click **Ignore**, never **Initialize**, and don't run **First Aid** on a failing drive (both write to it). Spotlight starts indexing every drive you connect; on a failing drive that's a lot of extra reading, so add its volume under **System Settings → Spotlight → Search Privacy**, or keep it unmounted.

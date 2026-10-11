@@ -30,6 +30,11 @@ LISTING = {
          "Partitions": [{"DeviceIdentifier": "disk5s1", "Content": "DOS_FAT_32", "Size": 67076096}]},
         {"DeviceIdentifier": "disk6", "Size": 0},
         {"DeviceIdentifier": "disk7", "Size": 0},
+        # Security bundles macOS attaches for itself ("Cryptex" images): not a user's source.
+        {"DeviceIdentifier": "disk8", "Size": 4194304, "OSInternal": False,
+         "VolumeName": "Creedence11M6270.SECUREPKITRUSTSTOREASSETS_SECUREPKITRUSTSTORE_Cryptex",
+         "MountPoint": "/System/Volumes/Preboot/Cryptexes/Incoming/OS"},
+        {"DeviceIdentifier": "disk9", "Size": 4194304, "OSInternal": True},
     ],
 }
 INFO = {
@@ -48,6 +53,10 @@ INFO = {
               "Removable": True, "RemovableMedia": True, "VirtualOrPhysical": "Physical", "TotalSize": 0},
     "disk7": {"DeviceIdentifier": "disk7", "MediaName": "WD Elements 25A3 Media", "BusProtocol": "USB",
               "Ejectable": True, "Removable": False, "VirtualOrPhysical": "Physical", "TotalSize": 0},
+    "disk8": {"DeviceIdentifier": "disk8", "MediaName": "Disk Image", "BusProtocol": "Disk Image",
+              "VirtualOrPhysical": "Virtual", "TotalSize": 4194304},
+    "disk9": {"DeviceIdentifier": "disk9", "MediaName": "Disk Image", "BusProtocol": "Disk Image",
+              "VirtualOrPhysical": "Virtual", "TotalSize": 4194304},
     "/": {"ParentWholeDisk": "disk3", "APFSPhysicalStores": [{"APFSPhysicalStore": "disk0s2"}]},
 }
 
@@ -73,7 +82,8 @@ def fake_diskutil(monkeypatch):
 
 def test_drive_list_from_diskutil(fake_diskutil):
     devices = {d.path: d for d in macos.list_devices()}
-    # disk3 is the APFS container made from disk0s2: a logical disk, left out.
+    # disk3 is the APFS container made from disk0s2 (a logical disk); disk8 and disk9 are macOS's own
+    # disk images: all left out. The disk image a user attached (disk5) stays.
     assert set(devices) == {"/dev/rdisk0", "/dev/rdisk4", "/dev/rdisk5", "/dev/rdisk6", "/dev/rdisk7"}
     internal, seagate, image = devices["/dev/rdisk0"], devices["/dev/rdisk4"], devices["/dev/rdisk5"]
     assert internal.system and internal.sector_size == 4096 and internal.bus == "Apple Fabric"

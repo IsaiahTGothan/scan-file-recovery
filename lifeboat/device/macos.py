@@ -130,10 +130,26 @@ def is_logical(info: Plist) -> bool:
     return info.get("VirtualOrPhysical") == "Virtual" and info.get("BusProtocol") != "Disk Image"
 
 
+def is_system_image(entry: Plist, info: Plist) -> bool:
+    """Disk images macOS attaches for itself (its "Cryptex" security bundles): not a user's source."""
+    if info.get("BusProtocol") != "Disk Image":
+        return False
+    if entry.get("OSInternal") or info.get("OSInternalMedia"):
+        return True
+    for part in list(entry.get("Partitions") or []) + list(entry.get("APFSVolumes") or []) + [entry]:
+        if not isinstance(part, dict):
+            continue
+        mount = str(part.get("MountPoint") or "")
+        name = str(part.get("VolumeName") or "")
+        if mount.startswith(("/System/", "/private/var/run/com.apple", "/Library/Apple/")) or name.endswith("Cryptex"):
+            return True
+    return False
+
+
 def describe_disk(entry: Plist, info: Plist, system: set[str]) -> DeviceInfo | None:
     """One whole disk from ``diskutil list`` (``entry``) and ``diskutil info`` (``info``)."""
     ident = str(entry.get("DeviceIdentifier") or info.get("DeviceIdentifier") or "")
-    if not ident or is_logical(info):
+    if not ident or is_logical(info) or is_system_image(entry, info):
         return None
     size = int(info.get("TotalSize") or info.get("Size") or entry.get("Size") or 0)
     block = int(info.get("DeviceBlockSize") or 512)

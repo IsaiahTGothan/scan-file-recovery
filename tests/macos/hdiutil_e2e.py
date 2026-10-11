@@ -143,6 +143,21 @@ def cmd_verify_api() -> None:
         print(f"  {d.path} size={d.size} ss={d.sector_size}/{d.physical_sector_size} bus={d.bus!r} "
               f"model={d.model!r} system={d.system} status={d.status!r} vols={d.volumes}", flush=True)
     assert any(d.system for d in devices), "the disk macOS runs from should be flagged"
+    # Only the test's own disk images may be listed: macOS attaches some for itself (security
+    # "Cryptex" bundles), which are not a user's source.
+    listing = plistlib.loads(subprocess.run(["diskutil", "list", "-plist"], capture_output=True).stdout)
+    for entry in listing["AllDisksAndPartitions"]:
+        info = plistlib.loads(subprocess.run(["diskutil", "info", "-plist", entry["DeviceIdentifier"]],
+                                             capture_output=True).stdout)
+        if info.get("BusProtocol") == "Disk Image":
+            parts = [(x.get("VolumeName"), x.get("MountPoint"))
+                     for x in entry.get("Partitions", []) + entry.get("APFSVolumes", [])]
+            print(f"  disk image {entry['DeviceIdentifier']}: OSInternal={entry.get('OSInternal')} "
+                  f"OSInternalMedia={info.get('OSInternalMedia')} volume={entry.get('VolumeName')!r} "
+                  f"mount={entry.get('MountPoint')!r} parts={parts}", flush=True)
+    ours = {item["disk"].replace("/dev/disk", "/dev/rdisk") for item in state.values()}
+    listed_images = {d.path for d in devices if d.bus == "Disk Image"}
+    assert listed_images == ours, f"disk images listed: {sorted(listed_images)}, expected only {sorted(ours)}"
     checked = run_check()
     for r in checked:
         print(f"  check: {r.name!r} kind={r.kind} path={r.path} size={r.size} verdict={r.verdict} "
