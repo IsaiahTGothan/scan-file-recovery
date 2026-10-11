@@ -649,9 +649,9 @@ class SummaryDialog(QDialog):
         layout.addWidget(where)
         if rest_count:
             # The rest of a split recovery, or what this one didn't get to: one click to carry on.
-            card = QFrame()
-            card.setObjectName("Card")
-            row = QHBoxLayout(card)
+            rest_card = QFrame()
+            rest_card.setObjectName("Card")
+            row = QHBoxLayout(rest_card)
             row.setContentsMargins(14, 10, 10, 10)
             text = QLabel(f"<b>{rest_count:,} files not recovered yet</b> ({format_size(rest_size)}): not ticked "
                           "because they didn't fit, or stopped, skipped or failed. Recover them now, for example "
@@ -662,7 +662,7 @@ class SummaryDialog(QDialog):
             more.clicked.connect(self._recover_rest)
             row.addWidget(text, 1)
             row.addWidget(more)
-            layout.addWidget(card)
+            layout.addWidget(rest_card)
         buttons = QHBoxLayout()
         open_folder = QPushButton(icons.icon("open"), "Open folder")
         open_folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(summary.job_dir)))
