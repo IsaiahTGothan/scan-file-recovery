@@ -1,11 +1,12 @@
 import os
+import time
 
 import pytest
 
 from lifeboat.device.image import MemoryDevice
 from lifeboat.device.simulated import FaultPlan, SimulatedFailingDevice
 from lifeboat.errors import DeviceGoneError, DeviceHungError
-from lifeboat.events import EventBus
+from lifeboat.events import EventBus, Level
 from lifeboat.rescue import ReadMode, ReadPolicy, RescueReader, SectorMap, State
 
 MiB = 1 << 20
@@ -15,7 +16,7 @@ def make(size=8 * MiB, plan=None, **policy):
     data = os.urandom(size)
     inner = MemoryDevice(data)
     dev = SimulatedFailingDevice(inner, plan or FaultPlan())
-    defaults = dict(block_size=256 * 1024, timeout=0.2, unit=4096)
+    defaults = dict(block_size=256 * 1024, timeout=0.2, unit=4096, wake_seconds=0)
     defaults.update(policy)
     reader = RescueReader(dev, ReadPolicy(**defaults), events=EventBus())
     return data, dev, reader
@@ -123,6 +124,30 @@ def test_disconnect_raises_gone_without_marking_failed():
     out = reader.read(0, 8 * MiB)
     assert out.complete
     assert bytes(out.data) == data
+
+
+def test_drive_waking_up_is_not_a_disconnect():
+    """A sleeping drive answers "not ready" while it spins up: wait for it, no error, nothing marked bad."""
+    seen = []
+    data, dev, reader = make(plan=FaultPlan(asleep=1.2), wake_seconds=10)
+    reader.events.subscribe(seen.append)
+    started = time.monotonic()
+    out = reader.read(0, 2 * MiB)
+    assert out.complete and bytes(out.data) == data[:2 * MiB]
+    assert time.monotonic() - started >= 1.0
+    assert reader.map.ranges([State.FAILED, State.BAD]) == []
+    assert not [e for e in seen if e.level >= Level.WARNING], [e.message for e in seen]
+    assert any("waking up" in e.message for e in seen)
+    assert any("answering again" in e.message for e in seen)
+
+
+def test_drive_that_stays_away_is_reported_after_the_wake_time():
+    data, dev, reader = make(plan=FaultPlan(disconnect_after_reads=1), wake_seconds=0.6)
+    started = time.monotonic()
+    with pytest.raises(DeviceGoneError):
+        reader.read(0, 2 * MiB)
+    assert time.monotonic() - started >= 0.6
+    assert reader.map.ranges([State.FAILED, State.BAD]) == []
 
 
 def test_slow_area_triggers_skip_in_fast_mode():

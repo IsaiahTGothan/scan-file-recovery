@@ -22,6 +22,7 @@ class FaultPlan:
     hang: list[tuple[int, int]] = field(default_factory=list)      # never answer (times out)
     slow_delay: float = 0.05
     disconnect_after_reads: int | None = None                      # unplug after N reads
+    asleep: float = 0.0                                            # first access wakes it: "not ready" this long
 
 
 class SimulatedFailingDevice(BlockDevice):
@@ -43,7 +44,20 @@ class SimulatedFailingDevice(BlockDevice):
         self.read_log: list[tuple[int, int, str]] = []
         self.connected = True
         self._flaky_left = dict(plan.flaky)
+        self._wake_at: float | None = None
         self._lock = threading.Lock()
+
+    def _sleeping(self) -> bool:
+        """True while the drive spins up; the first access starts it (call with the lock held)."""
+        if self.plan.asleep <= 0:
+            return False
+        now = time.monotonic()
+        if self._wake_at is None:
+            self._wake_at = now + self.plan.asleep
+        if now < self._wake_at:
+            return True
+        self.plan.asleep = 0.0
+        return False
 
     @staticmethod
     def _hits(ranges: list[tuple[int, int]], start: int, end: int) -> bool:
@@ -56,6 +70,10 @@ class SimulatedFailingDevice(BlockDevice):
             if not self.connected:
                 self.read_log.append((offset, length, "gone"))
                 raise ReadError("Device not connected", kind=ReadErrorKind.GONE, offset=offset, length=length)
+            if self._sleeping():
+                self.read_log.append((offset, length, "asleep"))
+                raise ReadError("Device not ready (waking up)", kind=ReadErrorKind.GONE, offset=offset,
+                                length=length, os_code=21)
             self.reads += 1
             limit = self.plan.disconnect_after_reads
             if limit is not None and self.reads > limit:
@@ -91,7 +109,8 @@ class SimulatedFailingDevice(BlockDevice):
         return self.inner.read_raw(offset, length, timeout)
 
     def is_present(self) -> bool:
-        return self.connected
+        with self._lock:
+            return self.connected and not self._sleeping()
 
     def reconnect(self) -> None:
         """Simulate plugging the drive back in."""

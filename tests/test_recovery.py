@@ -32,7 +32,8 @@ def sha(path) -> str:
 
 def scan_device(device, events=None, policy=None):
     events = events or EventBus()
-    reader = RescueReader(device, policy or ReadPolicy(timeout=1.0, block_size=256 * 1024), events=events)
+    reader = RescueReader(device, policy or ReadPolicy(timeout=1.0, block_size=256 * 1024, wake_seconds=0.2),
+                          events=events)
     info = DeviceInfo(path=str(getattr(device, "info").path), kind="image", size=device.size)
     result = Scanner(reader, info, events=events).quick_scan()
     return reader, info, result, events
@@ -485,3 +486,21 @@ def test_resume_never_uses_another_drives_job(images, tmp_path):
     assert not [t for t in second.tasks if "earlier session" in " ".join(t.notes)]
     assert any("different drive" in e.message for e in seen)
     assert second.count(Status.OK) == len(files)  # all copied again, next to the old files
+
+
+def test_source_asleep_when_the_recovery_starts(images, tmp_path):
+    """Seen on a real Seagate: the drive went to sleep between the scan and the recovery and
+    answered "not ready" while spinning up. That is not a disconnect: no error, no question."""
+    dev = SimulatedFailingDevice(ImageDevice(image_path("exfat")), FaultPlan())
+    reader, info, result, events = scan_device(dev, policy=ReadPolicy(timeout=1.0, wake_seconds=10))
+    seen = []
+    events.subscribe(seen.append)
+    files = all_files(result.root)
+    reader.cache.clear()
+    dev.plan.asleep = 1.0  # spun down; the next access wakes it
+    handler = AnswerOnce(Choice.ABORT)  # any question to the user would stop the job
+    job, summary = run_job(files, reader, info, tmp_path, handler=handler, events=events)
+    assert not handler.history, [i.title for i in handler.history]
+    assert not [e for e in seen if e.level >= Level.ERROR], [e.message for e in seen if e.level >= Level.ERROR]
+    assert all(t.status == Status.OK for t in summary.tasks)
+    assert any("waking up" in e.message for e in seen)

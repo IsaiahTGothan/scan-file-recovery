@@ -177,6 +177,7 @@ def test_failing_drive_problems_are_visible(app, images, tmp_path, monkeypatch):
     info = DeviceInfo(path=path, kind="image", size=os.path.getsize(path), model="Disk image")
     window.images.append(info)
     window.select_source(info)
+    window.reader.policy.wake_seconds = 0.2  # this test unplugs the drive for real
     window.quick_scan()
     _wait(app, window)
     root = window.result.volumes[0].root

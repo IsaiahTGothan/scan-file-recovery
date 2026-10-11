@@ -75,6 +75,9 @@ class ReadPolicy:
     unit: int | None = None            # trim/scrape granularity (default: physical sector)
     max_consecutive_timeouts: int = 4  # then ask the user what to do
     cache_bytes: int = 32 << 20
+    # A drive that stops answering gets this long to come back before it counts as
+    # disconnected: a drive waking up from sleep is "not ready" for several seconds.
+    wake_seconds: float = 30.0
 
 
 @dataclass
@@ -433,7 +436,35 @@ class RescueReader:
         except Exception:  # noqa: BLE001 - a probe failure means "not present"
             return False
 
-    def _device_read(self, start: int, end: int) -> tuple[bytes, float]:
+    def _reattached(self, size: int) -> bool:
+        """True when the drive answers again (reopening it if needed)."""
+        if self._present():
+            return True
+        try:
+            return bool(self.device.reopen()) and self._present() and self.device.size == size
+        except Exception:  # noqa: BLE001 - "not back yet"
+            return False
+
+    def _wait_until_back(self) -> bool:
+        """Give a drive that stopped answering ``wake_seconds`` to come back."""
+        deadline = time.monotonic() + self.policy.wake_seconds
+        size = self.device.size
+        told = False
+        while True:
+            if self._reattached(size):
+                if told and self.events is not None:
+                    self.events.info("The source drive is answering again. Continuing.")
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            if not told and self.events is not None:
+                told = True
+                self.events.info(f"The source drive is not answering. Waiting up to "
+                                 f"{self.policy.wake_seconds:.0f} seconds for it (it may be waking up from sleep).")
+            self._check()
+            time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+
+    def _device_read(self, start: int, end: int, wait_for_device: bool = True) -> tuple[bytes, float]:
         length = end - start
         if length <= CACHE_MAX_READ:
             cached = self.cache.get(start, end)
@@ -447,6 +478,11 @@ class RescueReader:
             self.stats.errors += 1
             self.stats.busy_seconds += time.monotonic() - began
             if err.kind in (ReadErrorKind.GONE, ReadErrorKind.OTHER) and not self._present():
+                # Not answering right now. A drive waking up from sleep looks exactly like this for
+                # a few seconds (spinning up, its USB bridge resetting), so give it time before
+                # calling it a disconnect, then read once more.
+                if wait_for_device and self._wait_until_back():
+                    return self._device_read(start, end, wait_for_device=False)
                 raise DeviceGoneError("The source drive disconnected.") from err
             if err.kind is ReadErrorKind.TIMEOUT:
                 self.stats.timeouts += 1

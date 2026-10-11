@@ -18,7 +18,7 @@ from tests.helpers import find, is_complete, read_all, tree_index
 
 def scan(device, deep=False, options=None, handler=None, events=None):
     events = events or EventBus()
-    reader = RescueReader(device, ReadPolicy(timeout=1.0), events=events)
+    reader = RescueReader(device, ReadPolicy(timeout=1.0, wake_seconds=0.2), events=events)
     info = DeviceInfo(path="test", kind="image", size=device.size)
     scanner = Scanner(reader, info, events=events, interventions=handler, options=options)
     result = scanner.deep_scan() if deep else scanner.quick_scan()
