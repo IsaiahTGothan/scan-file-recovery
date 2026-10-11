@@ -212,21 +212,43 @@ class Disk:
                            "deleted": False, "mtime": None, "sparse": True}
 
     def fragmented(self) -> None:
-        """A file in dozens of pieces: fill the disk, punch holes, write a file into them."""
+        """A file in dozens of pieces. HFS+: fill the disk, punch holes, write a file into them.
+        APFS holds back freed space too long for that, so two files grow in turns instead."""
         pieces = [f"Fragmented/piece {i:02}.bin" for i in range(48)]
         for i, rel in enumerate(pieces):
             self.write(rel, content(f"piece{i}", 24 * KiB))
         self.sync()
-        self.fill("Fragmented/filler.bin", keep=3 * MiB)
-        self.sync()
+        if not self.apfs:
+            self.fill("Fragmented/filler.bin", keep=3 * MiB)
+            self.sync()
         for rel in pieces[::2]:
             self.delete(rel)
             self.files[rel]["overwritten_maybe"] = True
         self.sync()
-        self.write("Fragmented/in many pieces.bin", content("fragmented", 2 * MiB + 500 * KiB))
+        if self.apfs:
+            self.interleaved("Fragmented/in many pieces.bin", "Fragmented/grew alongside.bin",
+                             2 * MiB + 500 * KiB, 16 * KiB)
+        else:
+            self.write("Fragmented/in many pieces.bin", content("fragmented", 2 * MiB + 500 * KiB))
+            self.sync()
+            self.delete("Fragmented/filler.bin")
         self.sync()
-        self.delete("Fragmented/filler.bin")
-        self.sync()
+
+    def interleaved(self, rel_a: str, rel_b: str, size: int, step: int) -> None:
+        data = {rel_a: content("fragmented", size), rel_b: content("alongside", size)}
+        handles = {rel: open(self.mount / rel, "wb") for rel in data}   # noqa: SIM115
+        try:
+            for start in range(0, size, step):
+                for rel, fh in handles.items():
+                    fh.write(data[rel][start:start + step])
+                    fh.flush()
+                    os.fsync(fh.fileno())
+        finally:
+            for fh in handles.values():
+                fh.close()
+        for rel, blob in data.items():
+            self.files[rel] = {"path": rel, "size": size, "sha256": hashlib.sha256(blob).hexdigest(),
+                               "deleted": False, "mtime": None}
 
     def fill(self, rel: str, keep: int) -> None:
         """Write zeros until the disk is full (free space as reported is not all usable on APFS),
