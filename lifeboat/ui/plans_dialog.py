@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from .. import plans
 from . import icons
 from .theme import current
-from .widgets import pill
+from .widgets import ScrollBody, keep_text_whole, pill
 
 log = logging.getLogger("lifeboat.ui")
 
@@ -126,7 +126,7 @@ class PlansDialog(QDialog):
     def __init__(self, parent: QWidget | None, period: str = "yearly") -> None:
         super().__init__(parent)
         self.setWindowTitle("Lifeboat plans")
-        self.setMinimumSize(1000, 660)
+        self.setMinimumWidth(1000)
         self.last_notice = ""
         status = plans.current()
         layout = QVBoxLayout(self)
@@ -173,7 +173,9 @@ class PlansDialog(QDialog):
         centred.addStretch(1)
         layout.addLayout(centred)
 
-        cards = QHBoxLayout()
+        body = QWidget()
+        cards = QHBoxLayout(body)
+        cards.setContentsMargins(0, 0, 0, 0)
         cards.setSpacing(16)
         self.cards: dict[str, _PlanCard] = {}
         for plan in plans.PLANS:
@@ -181,7 +183,7 @@ class PlansDialog(QDialog):
             card.chosen.connect(self._chosen)
             cards.addWidget(card, 1)
             self.cards[plan.key] = card
-        layout.addLayout(cards, 1)
+        layout.addWidget(ScrollBody(body, least=300), 1)    # scrolls on a short screen
 
         self.notice = QFrame()
         self.notice.setObjectName("Notice")
@@ -215,6 +217,7 @@ class PlansDialog(QDialog):
         foot.addWidget(close)
         layout.addLayout(foot)
         self.periods.get(period, self.periods["yearly"]).setChecked(True)
+        keep_text_whole(self)
 
     def _period_toggled(self, on: bool) -> None:
         if not on:

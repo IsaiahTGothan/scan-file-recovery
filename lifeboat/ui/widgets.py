@@ -28,13 +28,17 @@ from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QStackedWidget,
     QStyle,
@@ -249,7 +253,7 @@ class DiskMap(QWidget):
         self._base: QPixmap | None = None         # every block in its current colour
         self._version = -1
         self._hover = -1
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(48)                 # a short window shrinks the blocks, not the file list
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._timer = QTimer(self)                # the map's data: once a second
@@ -602,7 +606,7 @@ class ToastArea(QObject):
         self.toasts.insert(0, toast)
         while len(self.toasts) > self.MAX:
             self._close(self.toasts[-1])
-        toast.adjustSize()
+        self._fit(toast)
         toast.show()
         toast.raise_()
         self._layout()
@@ -614,11 +618,16 @@ class ToastArea(QObject):
             toast.deleteLater()
             self._layout()
 
+    @staticmethod
+    def _fit(toast: Toast) -> None:
+        """As tall as its wrapped text (adjustSize() would leave out the lines that wrap)."""
+        toast.resize(toast.width(), max(toast.sizeHint().height(), toast.heightForWidth(toast.width())))
+
     def _layout(self) -> None:
         """Newest at the bottom-right, older ones stacked above it."""
         y = self.host.height() - 56
         for toast in self.toasts:
-            toast.adjustSize()
+            self._fit(toast)
             y -= toast.height()
             x = self.host.width() - toast.width() - 18
             toast.move(QPoint(x, max(8, y)))
@@ -725,19 +734,25 @@ class PreviewPane(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(8)
+        head = QWidget()
+        head_layout = QVBoxLayout(head)
+        head_layout.setContentsMargins(0, 0, 0, 0)
+        head_layout.setSpacing(8)
         self.title = QLabel("No file selected")
         self.title.setObjectName("SectionTitle")
         self.title.setWordWrap(True)
-        layout.addWidget(self.title)
+        head_layout.addWidget(self.title)
         self.facts = QLabel()
         self.facts.setWordWrap(True)
         self.facts.setTextFormat(Qt.TextFormat.RichText)
         self.facts.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(self.facts)
+        head_layout.addWidget(self.facts)
+        self.details = ScrollBody(head, least=64)       # a short pane scrolls the details
+        layout.addWidget(self.details)
         self.stack = QStackedWidget()
         self.picture = QLabel()
         self.picture.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.picture.setMinimumHeight(160)
+        self.picture.setMinimumHeight(56)         # the picture is scaled to whatever room there is
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
         self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -751,6 +766,9 @@ class PreviewPane(QFrame):
         self.stack.addWidget(self.message)
         self.stack.addWidget(self.picture)
         self.stack.addWidget(self.text)
+        self.stack.setMinimumHeight(56)
+        # The preview takes what the details leave, never the other way round.
+        self.stack.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
         layout.addWidget(self.stack, 1)
         self.button = QPushButton(icons.icon("eye"), "Preview")
         self.button.clicked.connect(self._preview_clicked)
@@ -774,6 +792,7 @@ class PreviewPane(QFrame):
     def show_node(self, node: Node | None) -> None:
         self.node = node
         self._rows: list[tuple[str, str]] = []
+        self._note = ""                            # explanation under the details (locked volumes)
         locked = node.ref if node is not None and isinstance(node.ref, LockedVolume) else None
         self.unlock.setVisible(locked is not None)
         self.button.setVisible(locked is None)
@@ -816,17 +835,20 @@ class PreviewPane(QFrame):
                       ("Format", "APFS (FileVault or \u201cAPFS (Encrypted)\u201d)")]
         if locked.hint:
             self._rows.append(("Password hint", html.escape(locked.hint)))
+        # With the details (they scroll when the pane is short), not in the preview area.
+        self._note = ("<p>The files of this Mac volume are encrypted. Unlock it with the password used on the Mac "
+                      f"to see and recover them.</p><p style='color:{t.muted}'>The password stays in memory until "
+                      "Lifeboat closes; nothing is written to the drive.</p>")
         self._show_rows(node)
         self.stack.setCurrentWidget(self.message)
-        self.message.setText("The files of this Mac volume are encrypted. Unlock it with the password used on "
-                             "the Mac to see and recover them.\n\nThe password stays in memory until Lifeboat "
-                             "closes; nothing is written to the drive.")
+        self.message.setText("")
 
     def _show_rows(self, node: Node) -> None:
         t = current()
         html_rows = "".join(
             f"<tr><td style='color:{t.muted};padding-right:10px'>{k}</td><td>{v}</td></tr>" for k, v in self._rows)
-        self.facts.setText(f"<table>{html_rows}</table><div style='color:{t.muted}'>{html.escape(node.path())}</div>")
+        self.facts.setText(f"<table>{html_rows}</table><div style='color:{t.muted}'>{html.escape(node.path())}</div>"
+                           f"{self._note}")
 
     def show_layout(self, node: Node, fragments: int, problems: list[str], unsupported: str | None) -> None:
         """Details found while reading the file for the preview."""
@@ -875,6 +897,214 @@ class PreviewPane(QFrame):
             text = "\n".join(lines)
         self.text.setPlainText(note + text)
         self.stack.setCurrentWidget(self.text)
+
+
+# ------------------------------------------------------------------- layout
+def fit_height(window: QWidget) -> None:
+    """Make a window at least as tall as its content needs at its current width. Qt's size hints
+    don't count the lines that wrapped text takes, so without this a window opens too short and
+    squeezes its text."""
+    layout = window.layout()
+    if layout is None:
+        return
+    need = layout.minimumSize().height()
+    if layout.hasHeightForWidth():
+        need = max(need, layout.heightForWidth(window.width()))
+    screen = window.screen()
+    if screen is not None:
+        need = min(need, screen.availableGeometry().height() - 60)
+    if window.minimumHeight() != need:
+        window.setMinimumHeight(need)
+    if window.height() < need:
+        window.resize(window.width(), need)
+
+
+class _KeepTextWhole(QObject):
+    def __init__(self, window: QWidget) -> None:
+        super().__init__(window)
+        self.window = window
+        self.busy = False
+        window.installEventFilter(self)
+
+    WHEN = (QEvent.Type.Show, QEvent.Type.Resize, QEvent.Type.LayoutRequest)   # LayoutRequest: content changed
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if obj is self.window and not self.busy and event.type() in self.WHEN:
+            self.busy = True
+            try:
+                fit_height(self.window)
+            finally:
+                self.busy = False
+        return False
+
+
+def keep_text_whole(window: QWidget) -> None:
+    """Keep ``window`` (a dialog) tall enough for its wrapped text, however wide it is made."""
+    _KeepTextWhole(window)
+
+
+class ScrollBody(QScrollArea):
+    """Content that keeps its natural size and scrolls when there isn't room for all of it, rather
+    than being squeezed. It asks for its content's full height, so a window opens tall enough for
+    everything when the screen allows."""
+
+    def __init__(self, content: QWidget, least: int = 120) -> None:
+        super().__init__()
+        self.least = least              # the height it can shrink to (then it scrolls)
+        self.setObjectName("Clear")
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        if not content.objectName():
+            content.setObjectName("ClearInner")
+        self.setWidget(content)
+        content.installEventFilter(self)
+        policy = self.sizePolicy()
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        # The content changed size (new text): ask the layout around for room again. A scroll
+        # area doesn't pass that on by itself, so it would keep the size of its first content.
+        if obj is self.widget() and event.type() == QEvent.Type.LayoutRequest:
+            self.updateGeometry()
+        return super().eventFilter(obj, event)
+
+    def _content_height(self, width: int) -> int:
+        content = self.widget()
+        if content is None:
+            return 0
+        if content.hasHeightForWidth():
+            return content.heightForWidth(width)
+        return content.sizeHint().height()
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        # Measured as if the scroll bar took its share of the width: given this height, the
+        # content fits even then, so a scroll bar that once appeared goes away again.
+        bar = self.verticalScrollBar().sizeHint().width()
+        return self._content_height(max(1, width - bar)) + 2 * self.frameWidth()
+
+    def sizeHint(self) -> QSize:
+        content = self.widget()
+        width = max(content.sizeHint().width() if content is not None else 0, self.width())
+        return QSize(width, self.heightForWidth(width))
+
+    def minimumSizeHint(self) -> QSize:
+        content = self.widget()
+        width = content.minimumSizeHint().width() if content is not None else 0
+        return QSize(width, min(self.least, self.heightForWidth(max(width, self.width()))))
+
+
+class CardGrid(QWidget):
+    """Cards side by side that wrap onto more rows when there isn't room for them (four cards
+    become two rows of two, never three and one)."""
+
+    def __init__(self, cards: list[QWidget], least: int, spacing: int = 12) -> None:
+        super().__init__()
+        self.cards = cards
+        self.least = least              # narrowest a card may get
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setSpacing(spacing)
+        self.columns = 0
+        self._arrange(len(cards))
+
+    def _arrange(self, columns: int) -> None:
+        if columns == self.columns:
+            return
+        for card in self.cards:
+            self.grid.removeWidget(card)
+        for column in range(max(self.columns, columns)):
+            self.grid.setColumnStretch(column, 1 if column < columns else 0)
+        self.columns = columns
+        for index, card in enumerate(self.cards):
+            self.grid.addWidget(card, index // columns, index % columns)
+
+    def columns_for(self, width: int) -> int:
+        count = len(self.cards)
+        spacing = self.grid.horizontalSpacing()
+        fit = max(1, min(count, (width + spacing) // (self.least + spacing)))
+        while fit > 1 and count % fit and count % (fit - 1) == 0:     # even rows: 2+2 rather than 3+1
+            fit -= 1
+        return fit
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self.least, super().minimumSizeHint().height())
+
+    def resizeEvent(self, event: QEvent) -> None:
+        super().resizeEvent(event)  # type: ignore[arg-type]
+        self._arrange(self.columns_for(self.width()))
+
+
+class FlowLayout(QLayout):
+    """Lays its widgets out left to right and wraps them onto the next line when they don't fit
+    (the file type chips)."""
+
+    def __init__(self, parent: QWidget | None = None, spacing: int = 6) -> None:
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self._spacing = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:  # type: ignore[override]
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:  # type: ignore[override]
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self) -> Qt.Orientation:
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._place(QRect(0, 0, width, 0), move=False)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._place(rect, move=True)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        width = self.geometry().width()
+        if width > 0:                       # as many lines as the current width makes it wrap onto
+            size.setHeight(max(size.height(), self.heightForWidth(width)))
+        return size
+
+    def _place(self, rect: QRect, move: bool) -> int:
+        margins = self.contentsMargins()
+        area = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
+        x, y, line = area.x(), area.y(), 0
+        for item in self._items:
+            if item.widget() is not None and item.widget().isHidden():
+                continue
+            hint = item.sizeHint()
+            if x + hint.width() > area.right() + 1 and line > 0:
+                x = area.x()
+                y += line + self._spacing
+                line = 0
+            if move:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._spacing
+            line = max(line, hint.height())
+        return y + line - rect.y() + margins.bottom()
 
 
 class PaddedDelegate(QStyledItemDelegate):
@@ -1030,7 +1260,9 @@ class JobPanel(QFrame):
         bar_row.addWidget(self.percent)
         bar_row.addWidget(self.bar, 1)
         outer.addLayout(bar_row)
-        metrics = QHBoxLayout()
+        self.metrics_box = QWidget()
+        metrics = QHBoxLayout(self.metrics_box)
+        metrics.setContentsMargins(0, 0, 0, 0)
         metrics.setSpacing(28)
         self.speed = _Metric("Speed")
         self.graph = Sparkline()
@@ -1045,8 +1277,15 @@ class JobPanel(QFrame):
         metrics.addStretch(1)
         for metric in (self.left, self.done, self.items, self.bad):
             metrics.addWidget(metric)
-        outer.addLayout(metrics)
+        outer.addWidget(self.metrics_box)
         self.setVisible(False)
+
+    def set_compact(self, compact: bool) -> None:
+        """A short window: leave out the metrics row (the status bar shows the same numbers)."""
+        self.metrics_box.setVisible(not compact)
+        outer = self.layout()
+        outer.setContentsMargins(16, 8 if compact else 12, 14, 8 if compact else 12)
+        outer.setSpacing(6 if compact else 8)
 
     def add_button(self, button: QWidget) -> None:
         self.controls.addWidget(button)
@@ -1105,9 +1344,7 @@ class CategoryChips(QWidget):
     def __init__(self, names: list[str]) -> None:
         super().__init__()
         self.names = names
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout = FlowLayout(self, spacing=6)
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
         self.chips: dict[str, QToolButton] = {}
@@ -1124,7 +1361,6 @@ class CategoryChips(QWidget):
             self.chips[name] = chip
             layout.addWidget(chip)
             chip.toggled.connect(self._toggled)
-        layout.addStretch(1)
         self.chips[names[0]].setChecked(True)
 
     def _toggled(self, checked: bool) -> None:
@@ -1281,12 +1517,15 @@ def beep(kind: str) -> None:
 
 __all__ = [
     "Banner",
+    "CardGrid",
     "DiskMap",
     "F",
     "FittedBrowser",
+    "FlowLayout",
     "MapLegend",
     "PaddedDelegate",
     "PreviewPane",
+    "ScrollBody",
     "SourceList",
     "StatCard",
     "Toast",
@@ -1295,6 +1534,8 @@ __all__ = [
     "beep",
     "device_icon_name",
     "device_subtitle",
+    "fit_height",
+    "keep_text_whole",
     "pill",
     "toast_level",
 ]

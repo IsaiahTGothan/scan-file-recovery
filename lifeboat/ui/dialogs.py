@@ -36,7 +36,7 @@ from ..recover import PreflightReport, RecoverySummary, Status, check_destinatio
 from ..util import format_duration, format_size
 from . import icons
 from .theme import current
-from .widgets import Donut, StatCard
+from .widgets import Donut, ScrollBody, StatCard, keep_text_whole
 
 APP = os.environ.get("LIFEBOAT_SETTINGS_NAME", "Lifeboat")  # the test-suite uses its own settings
 
@@ -301,6 +301,7 @@ class RecoverDialog(QDialog):
         self._timer.timeout.connect(self._validate)
         self.dest.textChanged.connect(self._dest_edited)
         self._validate()
+        keep_text_whole(self)
 
     def _dest_edited(self) -> None:
         self._timer.start(400)  # validate once typing pauses
@@ -452,6 +453,7 @@ class ImageDialog(QDialog):
         layout.addWidget(buttons)
         self.path.textChanged.connect(self._validate)
         self._validate()
+        keep_text_whole(self)
 
     def _browse(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Save disk image", self.path.text(),
@@ -544,6 +546,7 @@ class DeepScanDialog(QDialog):
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        keep_text_whole(self)
 
     def _carve_toggled(self, on: bool) -> None:
         for box in self.groups.values():
@@ -631,6 +634,7 @@ class UnlockDialog(QDialog):
         layout.addWidget(buttons)
         self.field.textChanged.connect(self._edited)
         self.field.setFocus()
+        keep_text_whole(self)
 
     def _reveal(self, on: bool) -> None:
         self.field.setEchoMode(QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password)
@@ -737,6 +741,7 @@ class AboutDialog(QDialog):
         buttons.addStretch(1)
         buttons.addWidget(close)
         layout.addLayout(buttons)
+        keep_text_whole(self)
 
     def _plans(self) -> None:
         self.done(self.PLANS)
@@ -779,6 +784,10 @@ class WhatsNewDialog(QDialog):
         texts.addWidget(sub)
         head.addLayout(texts, 1)
         layout.addLayout(head)
+        body = QWidget()
+        cards = QVBoxLayout(body)
+        cards.setContentsMargins(0, 0, 0, 0)
+        cards.setSpacing(12)
         for icon_name, name, text in notes:
             card = QFrame()
             card.setObjectName("Card")
@@ -791,16 +800,16 @@ class WhatsNewDialog(QDialog):
             words = QLabel(f"<b>{html.escape(name)}</b><br>{html.escape(text)}")
             words.setWordWrap(True)
             words.setTextFormat(Qt.TextFormat.RichText)
-            # The width is known (fixed dialog): give wrapped text the height it needs up front.
-            words.setMinimumHeight(words.heightForWidth(660 - 44 - 28 - 28 - 14) + 4)
             row.addWidget(words, 1)
-            layout.addWidget(card)
+            cards.addWidget(card)
+        layout.addWidget(ScrollBody(body, least=240), 1)
         close = _primary(QPushButton("Got it"))
         close.clicked.connect(self.accept)
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(close)
         layout.addLayout(row)
+        keep_text_whole(self)
 
 
 class LicensesDialog(QDialog):
@@ -930,6 +939,7 @@ class SummaryDialog(QDialog):
         buttons.addStretch(1)
         buttons.addWidget(close)
         layout.addLayout(buttons)
+        keep_text_whole(self)
 
     def _problems(self) -> None:
         self.show_problems = True
@@ -982,3 +992,4 @@ class ErrorDialog(QDialog):
         buttons.addStretch(1)
         buttons.addWidget(ok)
         layout.addLayout(buttons)
+        keep_text_whole(self)

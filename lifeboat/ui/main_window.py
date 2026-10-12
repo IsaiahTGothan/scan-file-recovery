@@ -95,6 +95,7 @@ from .settings_dialog import SettingsDialog
 from .theme import current
 from .widgets import (
     Banner,
+    CardGrid,
     CategoryChips,
     DiskMap,
     FittedBrowser,
@@ -138,7 +139,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(APP_FULL_NAME)
         self.setWindowIcon(icons.app_icon())
         self.resize(1360, 860)
-        self.setMinimumSize(980, 640)
+        # Only the width is fixed: the height can't go below what the content needs (which grows
+        # with large text and while a job runs), so nothing ever gets squeezed.
+        self.setMinimumWidth(980)
         self.bus = EventBus()
         self.bridge = Bridge()
         connect_events(self.bus, self.bridge)
@@ -319,7 +322,6 @@ class MainWindow(QMainWindow):
         hint.setProperty("muted", True)
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        panel.setMinimumWidth(240)
         return panel
 
     def _welcome_page(self) -> QWidget:
@@ -480,8 +482,16 @@ class MainWindow(QMainWindow):
     def _overview_page(self) -> QWidget:
         page = QFrame()
         page.setObjectName("Panel")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(28, 24, 28, 24)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(1, 1, 1, 1)
+        scroll = QScrollArea()                # a small window scrolls instead of squeezing the tiles
+        scroll.setObjectName("Clear")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        inner = QWidget()
+        inner.setObjectName("ClearInner")
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(27, 23, 27, 23)
         layout.setSpacing(16)
         head = QHBoxLayout()
         self.ov_icon = QLabel()
@@ -495,20 +505,14 @@ class MainWindow(QMainWindow):
         texts.addWidget(self.ov_sub)
         head.addLayout(texts, 1)
         layout.addLayout(head)
-        cards = QHBoxLayout()
         self.card_capacity = StatCard("Capacity")
         self.card_sectors = StatCard("Sector size (logical / physical)")
         self.card_bus = StatCard("Connection")
         self.card_health = StatCard("Health (SMART)")
-        for c in (self.card_capacity, self.card_sectors, self.card_bus, self.card_health):
-            cards.addWidget(c)
-        layout.addLayout(cards)
+        layout.addWidget(CardGrid([self.card_capacity, self.card_sectors, self.card_bus, self.card_health], 210))
         self.ov_notes = FittedBrowser()
         layout.addWidget(self.ov_notes)
-        self.ov_tiles = QWidget()
-        tiles = QHBoxLayout(self.ov_tiles)
-        tiles.setContentsMargins(0, 0, 0, 0)
-        tiles.setSpacing(12)
+        tile_list: list[QWidget] = []
         self.ov_scan = QPushButton("Scan this drive")
         self.ov_scan.setProperty("primary", True)
         icons.put(self.ov_scan, "search", "white")
@@ -545,7 +549,8 @@ class MainWindow(QMainWindow):
             column.addStretch(1)
             button.setMinimumHeight(38)
             column.addWidget(button)
-            tiles.addWidget(tile, 1)
+            tile_list.append(tile)
+        self.ov_tiles = CardGrid(tile_list, 250)
         layout.addWidget(self.ov_tiles)
         actions = QHBoxLayout()
         self.ov_admin = QPushButton("Restart as administrator")
@@ -560,6 +565,8 @@ class MainWindow(QMainWindow):
         actions.addStretch(1)
         layout.addLayout(actions)
         layout.addStretch(1)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
         return page
 
     def _browser_page(self) -> QWidget:
@@ -702,6 +709,9 @@ class MainWindow(QMainWindow):
         d_layout.addWidget(self.legend)
         d_layout.addWidget(self.diskmap, 1)
         self.tabs.addTab(disk, icons.icon("grid"), "Disk map")
+        # They scroll: on a short screen the file list above gets the room, not these.
+        for view in (self.activity, self.problems, self.problem_detail, self.results):
+            view.setMinimumHeight(40)
         return self.tabs
 
     def _help_menu(self) -> QMenu:
@@ -914,6 +924,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._fit_header()
+        self.job_panel.set_compact(self.height() < 760)    # a short window keeps room for the files
 
     def _fit_header(self) -> None:
         """Keep the header in one piece in a narrow window: first the tool buttons show only their
