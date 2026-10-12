@@ -37,7 +37,7 @@ from ..logsetup import log_dir
 from . import icons
 from .dialogs import DEFAULTS, pref, settings
 from .theme import ACCENTS, current
-from .widgets import ScrollArea, Toggle, pill
+from .widgets import ScrollArea, Toggle, clearable, pill
 
 # (key, label) choices of each list setting, in display order
 CHOICES: dict[str, list[tuple[str, str]]] = {
@@ -219,8 +219,9 @@ class SettingsDialog(QDialog):
         self.search = QLineEdit()
         self.search.setObjectName("SettingsSearch")
         self.search.setPlaceholderText("Search settings")
-        self.search.setClearButtonEnabled(True)
-        self.search.addAction(icons.icon("search", current().muted), QLineEdit.ActionPosition.LeadingPosition)
+        clearable(self.search, "Clear the search")
+        glass = self.search.addAction(icons.icon("search", current().muted), QLineEdit.ActionPosition.LeadingPosition)
+        glass.setToolTip("Search every page of the settings")
         self.search.textChanged.connect(self._search)
         self.nav = QListWidget()
         self.nav.setObjectName("SettingsNav")

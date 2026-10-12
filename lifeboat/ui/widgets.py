@@ -22,7 +22,7 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLayout,
     QLayoutItem,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
@@ -489,29 +490,31 @@ class DiskMap(QWidget):
 
 
 class MapLegend(QWidget):
+    """What the disk map's colours mean, and how much of the drive each state covers. Wraps onto
+    more lines in a narrow window (in one line it made the window wider than the user had it)."""
+
     def __init__(self) -> None:
         super().__init__()
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(14)
+        layout = FlowLayout(self, spacing=10)
         t = current()
         self.labels: dict[str, QLabel] = {}
         for key, colour, text in (("good", t.map_good, "Read OK"), ("partial", t.map_partial, "Partly read"),
                                   ("skipped", t.map_skipped, "Skipped (retry later)"),
                                   ("failed", t.map_failed, "Failed block"), ("bad", t.map_bad, "Bad sectors"),
                                   ("untried", t.map_untried, "Not read")):
+            item = QWidget()
+            row = QHBoxLayout(item)
+            row.setContentsMargins(0, 0, 4, 0)
+            row.setSpacing(6)
             swatch = QLabel()
             swatch.setFixedSize(12, 12)
             swatch.setStyleSheet(f"background:{colour}; border-radius:2px;")
             label = QLabel(text)
             label.setProperty("muted", True)
-            row = QHBoxLayout()
-            row.setSpacing(6)
             row.addWidget(swatch)
             row.addWidget(label)
-            layout.addLayout(row)
+            layout.addWidget(item)
             self.labels[key] = label
-        layout.addStretch(1)
         self.totals = QLabel()
         self.totals.setProperty("muted", True)
         layout.addWidget(self.totals)
@@ -565,6 +568,7 @@ class Toast(QFrame):
         close.setIcon(icons.icon("close", t.muted))
         close.setFlat(True)
         close.setFixedSize(24, 24)
+        close.setToolTip("Dismiss")
         close.setStyleSheet("QPushButton { border: none; background: transparent; padding: 0; }")
         close.clicked.connect(self._close)
         layout.addWidget(close, 0, Qt.AlignmentFlag.AlignTop)
@@ -736,7 +740,7 @@ class PreviewPane(QFrame):
         self.setObjectName("Panel")
         self.node: Node | None = None
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
         head = QWidget()
         head_layout = QVBoxLayout(head)
@@ -1047,7 +1051,8 @@ class ScrollBody(ScrollArea):
     def minimumSizeHint(self) -> QSize:
         content = self.widget()
         width = content.minimumSizeHint().width() if content is not None else 0
-        return QSize(width, min(self.least, self.heightForWidth(max(width, self.width()))))
+        bar = self.verticalScrollBar().sizeHint().width()      # room for it, for when it scrolls
+        return QSize(width + bar, min(self.least, self.heightForWidth(max(width, self.width()))))
 
 
 class ElidedLabel(QLabel):
@@ -1472,11 +1477,17 @@ class JobPanel(QFrame):
         self.setVisible(False)
 
     def set_compact(self, compact: bool) -> None:
-        """A short window: leave out the metrics row (the status bar shows the same numbers)."""
+        """A short window: leave out the metrics row (the status bar shows the same numbers), and
+        a smaller percentage."""
         self.metrics_box.setVisible(not compact)
         outer = self.layout()
         outer.setContentsMargins(16, 8 if compact else 12, 14, 8 if compact else 12)
         outer.setSpacing(6 if compact else 8)
+        if bool(self.percent.property("compact")) != compact:
+            self.percent.setProperty("compact", compact)
+            self.percent.setMinimumWidth(72 if compact else 96)
+            self.percent.style().unpolish(self.percent)
+            self.percent.style().polish(self.percent)
 
     def add_button(self, button: QWidget) -> None:
         self.controls.addWidget(button)
@@ -1687,6 +1698,17 @@ class Toggle(QAbstractButton):
         x = track.left() + 3 + (track.width() - knob - 6) * self._pos
         painter.setBrush(QColor("#ffffff") if self.isEnabled() else QColor(t.panel_alt))
         painter.drawEllipse(QRectF(x, track.top() + 3, knob, knob))
+
+
+def clearable(edit: QLineEdit, tip: str = "Clear") -> None:
+    """Give a text box Qt's clear button, with a tooltip (Qt's has none)."""
+    edit.setClearButtonEnabled(True)
+    action = edit.findChild(QAction, "_q_qlineeditclearaction")
+    if action is not None:
+        action.setToolTip(tip)
+        for button in edit.findChildren(QToolButton):
+            if button.defaultAction() is action:
+                button.setToolTip(tip)
 
 
 def pill(text: str, kind: str = "Badge") -> QLabel:

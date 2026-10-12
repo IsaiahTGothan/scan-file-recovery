@@ -20,7 +20,7 @@ import shutil
 import sys
 import time
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -89,7 +89,7 @@ def _fixed_columns(view: QTableView | QTreeView) -> list[str]:
 def problems(top: QWidget, roomy: bool = False) -> list[str]:
     """What can't be read in full in ``top``. ``roomy``: the window is big enough for everything,
     so nothing may need to scroll either (a box that scrolls while there's room hides text too)."""
-    from lifeboat.ui.widgets import ElidedLabel, ScrollBody, SourceList
+    from lifeboat.ui.widgets import ElidedLabel, ScrollBody, SourceList, Toggle
 
     found: list[str] = []
     for widget in top.findChildren(QWidget):
@@ -127,6 +127,9 @@ def problems(top: QWidget, roomy: bool = False) -> list[str]:
             hint = widget.sizeHint()
             if hint.width() > widget.width() + SLACK:
                 found.append(f"{_name(widget)}: needs {hint.width()}px wide, has {widget.width()}px")
+        elif isinstance(widget, QAbstractButton) and not isinstance(widget, Toggle) and not widget.toolTip().strip():
+            found.append(f"{_name(widget)} in {_name(parent)}: only an icon, and no tooltip says what it does"
+                         if (parent := widget.parentWidget()) is not None else f"{_name(widget)}: no tooltip")
         elif isinstance(widget, QListWidget) and not isinstance(widget, SourceList):
             # Short lists of words (Settings' pages): each item whole. (The drive list shortens
             # long paths with "…" on purpose, and shows them whole in its tooltips.)
@@ -209,12 +212,21 @@ def tour(screen: str, hfs_image: str, locked_image: str) -> dict[str, list[str]]
 
     def check(label: str, widget: QWidget) -> None:
         pump(0.15)
+        # Finish the layout passes still queued (new text takes a few, one after the other), so
+        # a slow machine is measured in the same state as a fast one.
+        for _ in range(12):
+            app.sendPostedEvents(None, QEvent.Type.LayoutRequest.value)
+            app.processEvents()
         # Room for everything: dialogs on a big screen, and a full-HD main window.
         roomy = screen == "monitor" and (not isinstance(widget, mw.MainWindow) or widget.height() >= 1000)
         for item in problems(widget, roomy=roomy):
             report.setdefault(item, []).append(label)
         # The main window grew to fit its content. (Dialogs keep within the screen by themselves:
         # fit_height. This screen has no taskbar, so they may be taller than the main window.)
+        opened = widget.property("audit_width")
+        if isinstance(widget, mw.MainWindow) and opened and widget.width() > int(opened) + SLACK:
+            report.setdefault(f"MainWindow: made itself wider than it was ({opened}px to {widget.width()}px)",
+                              []).append(label)
         if isinstance(widget, mw.MainWindow) and widget.height() > tallest:
             report.setdefault(f"{type(widget).__name__}: taller than the screen allows ({widget.height()}px of "
                               f"{tallest}px)", []).append(label)
@@ -230,6 +242,15 @@ def tour(screen: str, hfs_image: str, locked_image: str) -> dict[str, list[str]]
             pump(0.05)
         pump(0.3)
         window.toasts.clear()
+
+    def settle(window: mw.MainWindow) -> None:
+        """Until the drive list has come in (on a Mac, diskutil can take a second: measured while
+        the page was taking in its note, the audit saw it half laid out) and the layout followed it."""
+        end = time.time() + 20
+        while window._enum_running and time.time() < end:
+            pump(0.05)
+        pump(0.3)
+        window.setProperty("audit_width", window.width())
 
     def deepest_folder(window: mw.MainWindow):  # noqa: ANN202
         folders = [n for n in window.result.root.walk() if n.children is not None]
@@ -282,7 +303,7 @@ def tour(screen: str, hfs_image: str, locked_image: str) -> dict[str, list[str]]
             window = mw.MainWindow()
             window.resize(width, height)
             window.show()
-            pump(0.4)
+            settle(window)
             size = f"{tag} {window.width()}x{window.height()}"
             check(f"home {size}", window)
             scan(window, hfs_image)
@@ -325,7 +346,7 @@ def tour(screen: str, hfs_image: str, locked_image: str) -> dict[str, list[str]]
             window = mw.MainWindow()
             window.resize(width, height)
             window.show()
-            pump(0.3)
+            settle(window)
             scan(window, locked_image)
             check(f"locked Mac volume {tag} {window.width()}x{window.height()}", window)
             window.close()

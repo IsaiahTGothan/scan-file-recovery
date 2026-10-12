@@ -112,6 +112,7 @@ from .widgets import (
     ToastArea,
     WrapLabel,
     beep,
+    clearable,
     device_icon_name,
     device_subtitle,
     pill,
@@ -587,9 +588,10 @@ class MainWindow(QMainWindow):
         bar.setSpacing(8)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search names (e.g. *.jpg, invoice) and press Enter")
-        icons.put(self.search.addAction(icons.icon("search", current().muted),
-                                        QLineEdit.ActionPosition.LeadingPosition), "search", "muted")
-        self.search.setClearButtonEnabled(True)
+        glass = self.search.addAction(icons.icon("search", current().muted), QLineEdit.ActionPosition.LeadingPosition)
+        glass.setToolTip("Search file names in the whole scan: type, then press Enter")
+        icons.put(glass, "search", "muted")
+        clearable(self.search, "Clear the search")
         self.category = CategoryChips(["All files", *CATEGORIES.keys(), "Other"])
         self.status_filter = QComboBox()
         self.status_filter.addItems(["Existing and deleted", "Existing only", "Deleted and found only"])
@@ -794,7 +796,7 @@ class MainWindow(QMainWindow):
 
     def _status_area(self) -> QWidget:
         bar = QFrame()
-        bar.setObjectName("HeaderBar")
+        bar.setObjectName("StatusBar")
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(14, 6, 14, 6)
         layout.setSpacing(10)

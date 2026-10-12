@@ -158,6 +158,8 @@ QWidget {{ font-size: {points}pt; }}
 QToolTip {{ color: {t.text}; background: {t.raised}; border: 1px solid {t.border}; padding: 6px; border-radius: 6px; }}
 QMainWindow, QDialog {{ background: {t.window}; }}
 #HeaderBar {{ background: {t.panel}; border-bottom: 1px solid {t.border}; }}
+#StatusBar {{ background: {t.panel}; border-top: 1px solid {t.border}; }}
+#StatusBar QPushButton {{ padding: 3px 10px; }}
 #AppTitle {{ font-size: 15pt; font-weight: 700; color: {t.text}; }}
 #AppSubtitle {{ color: {t.muted}; font-size: 9pt; }}
 #Panel, #Card {{ background: {t.panel}; border: 1px solid {t.border}; border-radius: 10px; }}
@@ -231,6 +233,7 @@ QToolButton#TickButton::menu-button {{ border-left: 1px solid {t.border}; width:
 #JobPanel {{ background: {t.panel}; border: 1px solid {t.border}; border-left: 4px solid {t.accent};
   border-radius: 10px; }}
 #JobPercent {{ font-size: {points * 2.1:.1f}pt; font-weight: 800; color: {t.text}; }}
+#JobPercent[compact="true"] {{ font-size: {points * 1.3:.1f}pt; }}
 #JobTitle {{ font-size: {points * 1.15:.1f}pt; font-weight: 700; }}
 #MetricValue {{ font-size: {points * 1.15:.1f}pt; font-weight: 700; }}
 #MetricLabel {{ color: {t.muted}; font-size: {points * 0.85:.1f}pt; }}
