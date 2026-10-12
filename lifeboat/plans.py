@@ -65,7 +65,7 @@ PLANS: tuple[Plan, ...] = (
           "Mac drives: HFS+, APFS and encrypted volumes",
           "Split a big recovery across several drives",
           "Every copy verified, full HTML and CSV reports",
-          "Email support"),
+          "E-mail support"),
          trial=True, popular=True),
     Plan("technician", "Technician", "For repair shops and IT",
          {"monthly": 49.0, "yearly": 299.0, "lifetime": 599.0},

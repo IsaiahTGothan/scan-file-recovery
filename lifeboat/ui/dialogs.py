@@ -284,7 +284,7 @@ class RecoverDialog(QDialog):
         self.verify.setChecked(bool(pref("verify")))
         self.times = QCheckBox("Keep original dates and times")
         self.times.setChecked(bool(pref("preserve_times")))
-        self.mark = QCheckBox('Add "[DAMAGED]" to the names of partly recovered files')
+        self.mark = QCheckBox("Add \u201c[DAMAGED]\u201d to the names of partly recovered files")
         self.mark.setChecked(bool(pref("mark_damaged")))
         for box in (self.job_folder, self.verify, self.times, self.mark):
             opts_layout.addWidget(box)

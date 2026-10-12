@@ -368,7 +368,8 @@ class SettingsDialog(QDialog):
                 ("job_folder", "Put the files in a new dated folder", "Keeps each recovery separate."),
                 ("verify", "Verify every file after copying", "Recommended: every copy is read back and compared."),
                 ("preserve_times", "Keep the original dates and times", ""),
-                ("mark_damaged", 'Add "[DAMAGED]" to partly recovered files', "So they stand out in a folder.")):
+                ("mark_damaged", "Add \u201c[DAMAGED]\u201d to partly recovered files",
+                 "So they stand out in a folder.")):
             how.row(name, self._check(key, name), hint)
         where = page.section("Saving")
         row = QWidget()
