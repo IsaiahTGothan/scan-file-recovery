@@ -145,7 +145,8 @@ def test_window_scan_select_recover(app, images, tmp_path, monkeypatch):
     summary = window.last_summary
     assert summary is not None and summary.outcome == "success"
     assert summary.count("ok") == 2
-    assert window.results_model.rowCount() == 0  # "problems only" view is empty
+    assert window.results_model.rowCount() == 0  # "problems only" view is empty, and says why
+    assert window.results.empty_hint() == "No problems: every file was recovered."
     window.results_model.set_mode("all")
     assert window.results_model.rowCount() == 2
     # every event reached the activity log
@@ -265,6 +266,26 @@ def test_toast_closed_early_does_not_raise(app, monkeypatch):
     assert not unhandled, unhandled
     assert area.toasts == []
     host.close()
+
+
+def test_empty_tables_say_why(app):
+    """Before anything happens, the bottom tabs say what will appear there instead of showing bare
+    headers, and the Problems tab has no empty explanation box beside its list."""
+    import lifeboat.ui.main_window as mw
+    from lifeboat.events import Event, Level
+
+    window = mw.MainWindow()
+    window.show()
+    _pump(app)
+    assert window.problems_model.rowCount() == 0
+    assert window.problems.empty_hint().startswith("No problems so far")
+    assert window.problem_detail.isHidden()
+    assert window.results.empty_hint() == ""   # "No recovery yet." above the table says it
+    window.bus.emit(Event(Level.WARNING, "Part of the file table could not be read", code="LB-204"))
+    _pump(app)
+    assert window.problems.empty_hint() == ""
+    assert not window.problem_detail.isHidden()
+    window.close()
 
 
 def test_problem_bursts_are_summarised(app, monkeypatch):

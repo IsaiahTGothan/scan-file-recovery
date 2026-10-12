@@ -189,6 +189,8 @@ QToolButton:disabled {{ color: {t.muted}; }}
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{ background: {t.panel_alt}; color: {t.text};
   border: 1px solid {t.border}; border-radius: 7px; padding: 5px 8px; selection-background-color: {t.selection}; }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {t.accent}; }}
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{ color: {t.muted};
+  background: {t.panel}; }}
 QComboBox QAbstractItemView {{ background: {t.raised}; color: {t.text}; border: 1px solid {t.border};
   selection-background-color: {t.selection}; }}
 QTreeView, QTableView, QListView, QPlainTextEdit, QTextBrowser {{ background: {t.panel}; color: {t.text};

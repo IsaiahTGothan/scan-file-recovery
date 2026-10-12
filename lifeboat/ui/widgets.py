@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QTableView,
     QTextBrowser,
     QToolButton,
     QToolTip,
@@ -1284,6 +1285,21 @@ class FlowLayout(QLayout):
         return y - rect.y() + margins.bottom()
 
 
+def _empty_hint(view: QTreeView | QTableView, hint: Callable[[], str]) -> str:
+    model = view.model()
+    if model is None or model.rowCount(view.rootIndex()) > 0:
+        return ""
+    return hint()
+
+
+def _paint_hint(view: QTreeView | QTableView, text: str) -> None:
+    painter = QPainter(view.viewport())
+    painter.setPen(QColor(current().muted))
+    area = view.viewport().rect().adjusted(16, 24, -16, -16)
+    centred = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+    painter.drawText(area, centred.value | Qt.TextFlag.TextWordWrap.value, text)
+
+
 class HintTreeView(QTreeView):
     """A list that says why it's empty (nothing matches the search or the filters, an empty folder)
     instead of showing nothing. ``hint`` gives the words."""
@@ -1293,20 +1309,30 @@ class HintTreeView(QTreeView):
         self.hint = hint
 
     def empty_hint(self) -> str:
-        model = self.model()
-        if model is None or model.rowCount(self.rootIndex()) > 0:
-            return ""
-        return self.hint()
+        return _empty_hint(self, self.hint)
 
     def paintEvent(self, event: QEvent) -> None:
         super().paintEvent(event)  # type: ignore[arg-type]
         text = self.empty_hint()
         if text:
-            painter = QPainter(self.viewport())
-            painter.setPen(QColor(current().muted))
-            area = self.viewport().rect().adjusted(16, 24, -16, -16)
-            centred = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
-            painter.drawText(area, centred.value | Qt.TextFlag.TextWordWrap.value, text)
+            _paint_hint(self, text)
+
+
+class HintTableView(QTableView):
+    """A table that says why it's empty, like ``HintTreeView``."""
+
+    def __init__(self, hint: Callable[[], str]) -> None:
+        super().__init__()
+        self.hint = hint
+
+    def empty_hint(self) -> str:
+        return _empty_hint(self, self.hint)
+
+    def paintEvent(self, event: QEvent) -> None:
+        super().paintEvent(event)  # type: ignore[arg-type]
+        text = self.empty_hint()
+        if text:
+            _paint_hint(self, text)
 
 
 class PaddedDelegate(QStyledItemDelegate):

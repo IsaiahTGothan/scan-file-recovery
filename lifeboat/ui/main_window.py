@@ -100,6 +100,7 @@ from .widgets import (
     ElidedLabel,
     FittedBrowser,
     FlowLayout,
+    HintTableView,
     HintTreeView,
     JobPanel,
     MapLegend,
@@ -675,16 +676,18 @@ class MainWindow(QMainWindow):
     def _bottom_tabs(self) -> QWidget:
         self.tabs = QTabWidget()
         self.activity_model = EventModel(Level.INFO)
-        self.activity = self._event_table(self.activity_model)
+        self.activity = self._event_table(self.activity_model, "What Lifeboat does appears here: drives found, "
+                                                               "scans and recoveries, step by step.")
         self.tabs.addTab(self.activity, icons.icon("list"), "Activity")
         problems = QWidget()
         p_layout = QHBoxLayout(problems)
         p_layout.setContentsMargins(0, 0, 0, 0)
         self.problems_model = EventModel(Level.WARNING)
-        self.problems = self._event_table(self.problems_model)
+        self.problems = self._event_table(self.problems_model, "No problems so far. Anything Lifeboat can't read "
+                                                               "or recover appears here, with what to do.")
         self.problem_detail = QTextBrowser()
         self.problem_detail.setMaximumWidth(380)
-        self.problem_detail.setPlaceholderText("Select a problem to see what it means and what to do.")
+        self.problem_detail.setVisible(False)   # until there is a problem to explain
         p_layout.addWidget(self.problems, 3)
         p_layout.addWidget(self.problem_detail, 2)
         self.tabs.addTab(problems, icons.icon("warning"), "Problems")
@@ -707,7 +710,7 @@ class MainWindow(QMainWindow):
         r_bar.addWidget(self.btn_open_report)
         r_layout.addLayout(r_bar)
         self.results_model = ResultsModel()
-        self.results = QTableView()
+        self.results = HintTableView(self._results_empty_hint)
         self.results.setModel(self.results_model)
         self.results.verticalHeader().setVisible(False)
         self.results.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -784,8 +787,8 @@ class MainWindow(QMainWindow):
         menu.setToolTipsVisible(True)
         return menu
 
-    def _event_table(self, model: EventModel) -> QTableView:
-        view = QTableView()
+    def _event_table(self, model: EventModel, hint: str) -> QTableView:
+        view = HintTableView(lambda: hint)
         view.setModel(model)
         view.verticalHeader().setVisible(False)
         view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -972,6 +975,13 @@ class MainWindow(QMainWindow):
 
     def _tick_none(self) -> None:
         self.selection.select_all(False)
+
+    def _results_empty_hint(self) -> str:
+        if self.last_summary is None:
+            return ""  # the bar above says "No recovery yet."
+        return {"problems": "No problems: every file was recovered.",
+                "ok": "No file was recovered whole. Choose Problems only to see why.",
+                }.get(self.results_model.mode, "This recovery had no files.")
 
     def _results_mode_changed(self, index: int) -> None:
         self.results_model.set_mode(["problems", "ok", "all"][index])
@@ -1233,7 +1243,7 @@ class MainWindow(QMainWindow):
     # ================================================================== jobs
     def _start(self, kind: str, label: str, work) -> Job | None:
         if self.job is not None:
-            self.toasts.show("warning", "Already busy", "Wait for the current job to finish or stop it.")
+            self.toasts.show("warning", "A job is running", "Wait for it to finish or stop it, then try again.")
             return None
         job = Job(kind, self.bridge, work)
         self.job = job
@@ -1371,8 +1381,9 @@ class MainWindow(QMainWindow):
         one = len(locked) == 1
         lock_note = (f" {plural(len(locked), 'encrypted volume')} {'is' if one else 'are'} locked: select "
                      f"{'it' if one else 'one'} and click Unlock." if locked else "")
+        how = "deleted or found by signature" if result.carved else "deleted"
         self.found_label.setText(
-            f"{plural(files, 'file')} found ({deleted:,} deleted or found by signature), {format_size(size)} in "
+            f"{plural(files, 'file')} found ({deleted:,} {how}), {format_size(size)} in "
             f"{plural(len(vols), 'volume')}.{lock_note}")
         target = focus or (locked[0] if locked else None)
         index = self.folder_model.index_of(target) if target is not None else QModelIndex()
@@ -1585,7 +1596,9 @@ class MainWindow(QMainWindow):
             assert isinstance(result, ScanResult)
             self._show_result(result)
             files, deleted, _size = result.counts()
-            self._notify("success", "Scan finished", f"{plural(files, 'file')} found ({deleted:,} deleted).")
+            how = "deleted or found by signature" if result.carved else "deleted"
+            self._notify("success", "Deep scan finished" if kind == "deep" else "Scan finished",
+                         f"{plural(files, 'file')} found ({deleted:,} {how}).")
         elif kind == "unlock":
             assert isinstance(result, tuple)
             self._unlock_done(*result)
@@ -1713,6 +1726,9 @@ class MainWindow(QMainWindow):
         if event.level >= Level.WARNING:
             self.problems_model.add(event)
             self._problem_count += 1
+            if self.problem_detail.isHidden():
+                self.problem_detail.setPlaceholderText("Select a problem to see what it means and what to do.")
+                self.problem_detail.setVisible(True)
             t = current()
             colour = t.bad if event.level >= Level.ERROR else t.warn
             self.problem_badge.setText(f"{self._problem_count:,} problem{'s' if self._problem_count != 1 else ''}")
