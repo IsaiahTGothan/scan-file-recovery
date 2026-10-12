@@ -6,7 +6,7 @@ import html
 import os
 
 from PySide6.QtCore import QSettings, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QGuiApplication, QPixmap
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import build_info
-from ..branding import APP_FULL_NAME, PUBLISHER, PUBLISHER_URL, SETTINGS_ORG, TAGLINE, owner_logo
+from ..branding import APP_FULL_NAME, PUBLISHER, PUBLISHER_URL, SETTINGS_ORG, TAGLINE
 from ..device.base import DeviceInfo
 from ..errors import E_DEST_SPACE
 from ..fs.carving import GROUPS
@@ -704,13 +704,13 @@ class AboutDialog(QDialog):
         reads.setWordWrap(True)
         layout.addWidget(reads)
         by = QHBoxLayout()
-        owner = owner_logo()
-        if owner is not None:
-            pix = QPixmap(str(owner))
-            if not pix.isNull():
-                owner_label = QLabel()
-                owner_label.setPixmap(pix.scaledToHeight(40, Qt.TransformationMode.SmoothTransformation))
-                by.addWidget(owner_label)
+        mark = icons.owner_pixmap(28)
+        if mark is not None:
+            owner_label = QLabel()
+            owner_label.setPixmap(mark)
+            owner_label.setToolTip(PUBLISHER)
+            by.addWidget(owner_label)
+            by.addSpacing(6)
         publisher = QLabel(f'Developed by <a href="{PUBLISHER_URL}">{PUBLISHER}</a>')
         publisher.setOpenExternalLinks(True)
         by.addWidget(publisher)

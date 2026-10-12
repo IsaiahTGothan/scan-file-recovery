@@ -13,6 +13,12 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT.parent))
 # Keep the GUI tests away from the settings of a Lifeboat installed on the same machine.
 os.environ.setdefault("LIFEBOAT_SETTINGS_NAME", "Lifeboat tests")
+# On Windows, Qt's offscreen platform (the GUI tests' screen) reads fonts from a folder of Qt's own
+# that PySide6 doesn't ship; without fonts it draws every letter as a box, twice as wide as text.
+if sys.platform == "win32":
+    os.environ.setdefault("QT_QPA_FONTDIR", os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"))
+# The font the app gets from the system, for the GUI tests (the offscreen platform has none).
+UI_FONT = {"win32": "Segoe UI"}.get(sys.platform, "")
 
 IMAGES = Path(os.environ.get("LIFEBOAT_TEST_IMAGES", ROOT / ".images"))
 APPLE = ROOT / "fixtures" / "apple"      # disks made by macOS (tests/macos/make_fixtures.py)

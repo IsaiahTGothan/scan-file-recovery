@@ -5,10 +5,10 @@ from __future__ import annotations
 from functools import lru_cache
 
 from PySide6.QtCore import QByteArray, QObject, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
-from ..branding import ACCENT, NAVY, assets_dir
+from ..branding import ACCENT, NAVY, assets_dir, owner_logo
 
 _S = 'fill="none" stroke="{c}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"'
 
@@ -165,9 +165,51 @@ def app_pixmap(size: int) -> QPixmap:
     return _render(APP_ICON_SVG.encode(), size)
 
 
+def _one_colour(image: QImage) -> bool:
+    """Every visible pixel the same colour (a logo in white, or in black, on transparent)."""
+    step = max(1, min(image.width(), image.height()) // 48)
+    seen: QColor | None = None
+    for y in range(0, image.height(), step):
+        for x in range(0, image.width(), step):
+            c = image.pixelColor(x, y)
+            if c.alpha() < 200:
+                continue
+            if seen is None:
+                seen = c
+            elif max(abs(c.red() - seen.red()), abs(c.green() - seen.green()), abs(c.blue() - seen.blue())) > 48:
+                return False
+    return seen is not None
+
+
+@lru_cache(maxsize=8)
+def owner_pixmap(height: int, color: str | None = None) -> QPixmap | None:
+    """The developer's logo (lifeboat/assets/owner-logo.*), ``height`` pixels tall, sharp on high-DPI
+    screens. A one-colour logo is drawn in the theme's text colour, so it shows on the dark and the
+    light theme alike; a logo in colour is drawn as it is."""
+    from .theme import current
+
+    path = owner_logo()
+    image = QImage(str(path)) if path is not None else QImage()
+    if image.isNull():
+        return None
+    app = QGuiApplication.instance()
+    ratio = max(1.0, app.devicePixelRatio()) if isinstance(app, QGuiApplication) else 1.0
+    image = image.scaledToHeight(round(height * ratio), Qt.TransformationMode.SmoothTransformation)
+    image = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+    if _one_colour(image):
+        painter = QPainter(image)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(image.rect(), QColor(color or current().text))
+        painter.end()
+    result = QPixmap.fromImage(image)
+    result.setDevicePixelRatio(ratio)
+    return result
+
+
 def clear_cache() -> None:
     icon.cache_clear()
     pixmap.cache_clear()
+    owner_pixmap.cache_clear()
 
 
 # Icons given with put() remember their name and colour role, so refresh() can draw them again

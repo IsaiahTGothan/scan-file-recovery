@@ -108,6 +108,19 @@ def display_time(ts: float | None) -> str:
         return ""
 
 
+def display_clock(ts: float) -> str:
+    """A time of day as the app shows it (the activity log): 12-hour if the date style is."""
+    try:
+        return _dt.datetime.fromtimestamp(ts).strftime("%I:%M:%S %p" if "%p" in _time_style else "%H:%M:%S")
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+def widest_clock() -> str:
+    """The longest time display_clock gives, to size a column for."""
+    return "12:59:59 PM" if "%p" in _time_style else "23:59:59"
+
+
 def _sane(ts: float) -> float | None:
     if _MIN_TS <= ts <= _MAX_TS:
         return ts

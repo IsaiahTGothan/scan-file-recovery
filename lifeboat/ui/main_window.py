@@ -10,14 +10,13 @@ from pathlib import Path
 from typing import cast
 
 from PySide6.QtCore import QModelIndex, Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QColor, QKeySequence, QResizeEvent
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QFont, QFontMetrics, QKeySequence, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QComboBox,
     QFileDialog,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -28,8 +27,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
+    QSpacerItem,
     QSplitter,
     QStackedWidget,
     QSystemTrayIcon,
@@ -43,7 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import plans
-from ..branding import APP_FULL_NAME, APP_NAME, CREDIT, TAGLINE, owner_logo
+from ..branding import APP_FULL_NAME, APP_NAME, CREDIT, TAGLINE
 from ..device.base import NO_MEDIA, NOT_ANSWERING, BlockDevice, DeviceInfo
 from ..device.check import system_tool
 from ..device.enumerate import is_admin, list_devices, open_device
@@ -61,7 +60,7 @@ from ..recover.destination import free_space
 from ..rescue.reader import ReadMode, ReadPolicy, RescueReader
 from ..rescue.sectormap import SectorMap, State
 from ..scan import Scanner, ScanOptions, ScanResult
-from ..util import format_duration, format_rate, format_size
+from ..util import format_duration, format_rate, format_size, widest_clock
 from . import icons, ticking
 from .bridge import Bridge, Job, PendingDecision, connect_events
 from .dialogs import (
@@ -98,14 +97,19 @@ from .widgets import (
     CardGrid,
     CategoryChips,
     DiskMap,
+    ElidedLabel,
     FittedBrowser,
+    FlowLayout,
     JobPanel,
     MapLegend,
     PaddedDelegate,
     PreviewPane,
+    ScrollArea,
+    SideBySide,
     SourceList,
     StatCard,
     ToastArea,
+    WrapLabel,
     beep,
     device_icon_name,
     device_subtitle,
@@ -133,15 +137,16 @@ class MainWindow(QMainWindow):
     TOAST_GAP_ERROR = 2.0    # seconds between pop-ups; problems in between are summarised
     TOAST_GAP_WARNING = 4.0
     TAB_ICONS = ("list", "warning", "report", "grid")   # Activity, Problems, Results, Disk map
+    MIN_WIDTH = 980          # narrowest window, unless its content needs more (large text, wide fonts)
+    BRAND_HEIGHT = 22        # the developer's logo in the header
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(APP_FULL_NAME)
         self.setWindowIcon(icons.app_icon())
         self.resize(1360, 860)
-        # Only the width is fixed: the height can't go below what the content needs (which grows
-        # with large text and while a job runs), so nothing ever gets squeezed.
-        self.setMinimumWidth(980)
+        # The window can't be made smaller than its content needs (which grows with large text and
+        # while a job runs), so nothing ever gets squeezed; and never narrower than MIN_WIDTH.
         self.bus = EventBus()
         self.bridge = Bridge()
         connect_events(self.bus, self.bridge)
@@ -200,6 +205,7 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         root.addWidget(self._header())
+        root.addSpacerItem(QSpacerItem(self.MIN_WIDTH, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed))
         body = QWidget()
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(12, 10, 12, 8)
@@ -208,6 +214,7 @@ class MainWindow(QMainWindow):
         body_layout.addWidget(self.banner)
         self.job_panel = JobPanel()
         body_layout.addWidget(self.job_panel)
+        self.banner.closed.connect(lambda: self.job_panel.set_covered(False))
         self.vsplit = QSplitter(Qt.Orientation.Vertical)
         self.hsplit = QSplitter(Qt.Orientation.Horizontal)
         self.hsplit.addWidget(self._sources_panel())
@@ -223,7 +230,7 @@ class MainWindow(QMainWindow):
         self.vsplit.addWidget(self._bottom_tabs())
         self.vsplit.setStretchFactor(0, 3)
         self.vsplit.setStretchFactor(1, 1)
-        self.vsplit.setSizes([620, 220])
+        self.vsplit.setSizes([660, 180])
         body_layout.addWidget(self.vsplit, 1)
         root.addWidget(body, 1)
         root.addWidget(self._status_area())
@@ -233,6 +240,8 @@ class MainWindow(QMainWindow):
     def _header(self) -> QWidget:
         bar = QFrame()
         bar.setObjectName("HeaderBar")
+        # Its width doesn't set the window's: in a narrow window it fits itself (_fit_header).
+        bar.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(14, 8, 14, 8)
         layout.setSpacing(6)
@@ -277,16 +286,14 @@ class MainWindow(QMainWindow):
         self.btn_recover.setToolTip("Copy the ticked files to another drive (Ctrl+S)")
         layout.addWidget(self.btn_recover)
         layout.addSpacing(8)
-        owner = owner_logo()
-        if owner is not None:
-            from PySide6.QtGui import QPixmap
-
-            pix = QPixmap(str(owner))
-            if not pix.isNull():
-                brand = QLabel()
-                brand.setPixmap(pix.scaledToHeight(30, Qt.TransformationMode.SmoothTransformation))
-                brand.setToolTip(f"{APP_FULL_NAME}, {CREDIT}")
-                layout.addWidget(brand)
+        self.brand: QLabel | None = None
+        mark = icons.owner_pixmap(self.BRAND_HEIGHT)
+        if mark is not None:
+            self.brand = QLabel()
+            self.brand.setPixmap(mark)
+            self.brand.setToolTip(f"{APP_FULL_NAME}, {CREDIT}")
+            layout.addWidget(self.brand)
+            layout.addSpacing(8)
         self.header_bar = bar
         self.btn_settings = _tool("", "settings", "Settings (Ctrl+,)")
         self.btn_help = _tool("", "help", "Help: what's new, shortcuts, plans, about")
@@ -329,19 +336,15 @@ class MainWindow(QMainWindow):
         page.setObjectName("Panel")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(1, 1, 1, 1)
-        scroll = QScrollArea()
-        scroll.setObjectName("Clear")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
         inner = QWidget()
         inner.setObjectName("ClearInner")
         layout = QVBoxLayout(inner)
-        layout.setContentsMargins(30, 22, 30, 22)
-        layout.setSpacing(14)
+        layout.setContentsMargins(28, 18, 28, 18)
+        layout.setSpacing(12)
         top = QHBoxLayout()
         top.setSpacing(16)
         logo = QLabel()
-        logo.setPixmap(icons.app_pixmap(72))
+        logo.setPixmap(icons.app_pixmap(64))
         top.addWidget(logo)
         texts = QVBoxLayout()
         texts.setSpacing(4)
@@ -354,44 +357,44 @@ class MainWindow(QMainWindow):
         texts.addWidget(sub)
         top.addLayout(texts, 1)
         layout.addLayout(top)
-        steps = QGridLayout()
-        steps.setSpacing(12)
+        step_cards: list[QWidget] = []
         items = [
             ("1", "Pick the drive", "Connect the failing drive and select it on the left."),
             ("2", "Scan it", "Scan reads the file tables. Deep scan searches the whole drive when they are damaged."),
             ("3", "Tick your files", "Browse folders, search, filter by type, preview before recovering."),
             ("4", "Recover", "Save to a different, healthy drive. Every copy is verified and reported."),
         ]
-        for i, (num, head, text) in enumerate(items):
+        for num, head, text in items:
             card = QFrame()
             card.setObjectName("StepCard")
             c_layout = QVBoxLayout(card)
-            c_layout.setContentsMargins(16, 14, 16, 14)
+            c_layout.setContentsMargins(16, 12, 16, 14)
             c_layout.setSpacing(4)
+            title_row = QHBoxLayout()
+            title_row.setSpacing(10)
             n = QLabel(num)
             n.setObjectName("StepNumber")
             h = QLabel(head)
             h.setObjectName("SectionTitle")
+            title_row.addWidget(n)
+            title_row.addWidget(h, 1)
             body = QLabel(text)
             body.setWordWrap(True)
             body.setProperty("muted", True)
-            c_layout.addWidget(n)
-            c_layout.addWidget(h)
+            c_layout.addLayout(title_row)
             c_layout.addWidget(body)
             c_layout.addStretch(1)
-            steps.addWidget(card, 0, i)
-            steps.setColumnStretch(i, 1)
-        layout.addLayout(steps)
-        formats = QHBoxLayout()
-        formats.setSpacing(6)
+            step_cards.append(card)
+        layout.addWidget(CardGrid(step_cards, 200))         # two rows of two in a narrow window
+        formats = QWidget()
+        chips = FlowLayout(formats, spacing=6)          # onto a second line in a narrow window
         reads = QLabel("Reads")
         reads.setProperty("muted", True)
-        formats.addWidget(reads)
+        chips.addWidget(reads)
         for name in ("NTFS", "exFAT", "FAT32", "Mac HFS+", "Mac APFS", "Encrypted APFS", "MBR and GPT",
                      "Disk images"):
-            formats.addWidget(pill(name, "FormatChip"))
-        formats.addStretch(1)
-        layout.addLayout(formats)
+            chips.addWidget(pill(name, "FormatChip"))
+        layout.addWidget(formats)
         if sys.platform == "darwin":
             offers = ("<li>If macOS says the disk isn't readable and offers to <b>Initialize</b> it, click "
                       "<b>Ignore</b>. Don't run <b>First Aid</b> on it either: both write to the drive and can "
@@ -416,6 +419,7 @@ class MainWindow(QMainWindow):
             f"<li>{explorer}</li></ul>")
         safety.setWordWrap(True)
         safety.setTextFormat(Qt.TextFormat.RichText)
+        safety.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)    # level with the next card
         safety_column.addWidget(safety)
         tips.addWidget(safety_card, 3)
         missing_card = QFrame()
@@ -440,7 +444,8 @@ class MainWindow(QMainWindow):
         layout.addLayout(tips)
         layout.addStretch(1)
         layout.addWidget(self._promo_card())
-        scroll.setWidget(inner)
+        scroll = ScrollArea(inner)
+        scroll.setObjectName("Clear")
         outer.addWidget(scroll)
         return page
 
@@ -452,7 +457,9 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(18, 14, 16, 14)
         row.setSpacing(14)
         row.addWidget(self._glyph("sparkle", 34, "accent"), 0, Qt.AlignmentFlag.AlignTop)
-        texts = QVBoxLayout()
+        text_box = QWidget()
+        texts = QVBoxLayout(text_box)
+        texts.setContentsMargins(0, 0, 0, 0)
         texts.setSpacing(3)
         head = QHBoxLayout()
         head.setSpacing(8)
@@ -467,16 +474,20 @@ class MainWindow(QMainWindow):
         body.setWordWrap(True)
         body.setProperty("muted", True)
         texts.addWidget(body)
-        row.addLayout(texts, 1)
         self.promo_plans = QPushButton("See plans")
         self.promo_plans.setProperty("upgrade", True)
         icons.put(self.promo_plans, "star", "accent")
         self.promo_trial = QPushButton("Start free trial")
         self.promo_trial.setProperty("primary", True)
         icons.put(self.promo_trial, "gift", "white")
+        button_box = QWidget()
+        buttons = QHBoxLayout(button_box)
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(8)
         for button in (self.promo_plans, self.promo_trial):
             button.setMinimumHeight(36)
-            row.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+            buttons.addWidget(button)
+        row.addWidget(SideBySide(text_box, button_box), 1)      # the buttons go under the text when narrow
         return card
 
     def _overview_page(self) -> QWidget:
@@ -484,10 +495,6 @@ class MainWindow(QMainWindow):
         page.setObjectName("Panel")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(1, 1, 1, 1)
-        scroll = QScrollArea()                # a small window scrolls instead of squeezing the tiles
-        scroll.setObjectName("Clear")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
         inner = QWidget()
         inner.setObjectName("ClearInner")
         layout = QVBoxLayout(inner)
@@ -565,7 +572,8 @@ class MainWindow(QMainWindow):
         actions.addStretch(1)
         layout.addLayout(actions)
         layout.addStretch(1)
-        scroll.setWidget(inner)
+        scroll = ScrollArea(inner)            # a small window scrolls instead of squeezing the tiles
+        scroll.setObjectName("Clear")
         outer.addWidget(scroll)
         return page
 
@@ -600,7 +608,7 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.btn_select_none)
         layout.addLayout(bar)
         layout.addWidget(self.category)
-        self.found_label = QLabel()
+        self.found_label = WrapLabel()
         self.found_label.setProperty("muted", True)
         layout.addWidget(self.found_label)
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -621,7 +629,7 @@ class MainWindow(QMainWindow):
         m_layout = QVBoxLayout(middle)
         m_layout.setContentsMargins(0, 0, 0, 0)
         m_layout.setSpacing(4)
-        self.crumb = QLabel()
+        self.crumb = ElidedLabel(mode=Qt.TextElideMode.ElideMiddle)     # long paths: "Volume › … › Folder"
         self.crumb.setProperty("muted", True)
         m_layout.addWidget(self.crumb)
         self.list_model = FileListModel(self.selection)
@@ -775,13 +783,11 @@ class MainWindow(QMainWindow):
         view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         view.setWordWrap(False)
         header = view.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.resizeSection(0, 78)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)      # time and code: _apply_row_heights
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(1, 30)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        header.resizeSection(3, 84)                        # codes are short: LB-123
         view.verticalHeader().setDefaultSectionSize(24)
         return view
 
@@ -791,13 +797,12 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(14, 6, 14, 6)
         layout.setSpacing(10)
-        self.status_text = QLabel("Ready")
-        self.status_text.setMinimumWidth(260)
+        self.status_text = ElidedLabel("Ready")
         self.status_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.progress = QProgressBar()
         self.progress.setFixedWidth(260)
         self.progress.setVisible(False)
-        self.status_detail = QLabel()
+        self.status_detail = ElidedLabel()
         self.status_detail.setProperty("muted", True)
         self.problem_badge = QPushButton("No problems")
         self.problem_badge.setFlat(True)
@@ -1540,7 +1545,7 @@ class MainWindow(QMainWindow):
         if self.job.control.paused:
             phase += " (paused)"
         self.status_text.setText(f"{phase} — {p.item}" if p.item else phase)
-        if self.job_panel.isVisible():
+        if self.job_panel.active:
             self.job_panel.update_progress(p, self.job.control.paused)
         details = []
         if p.items_total:
@@ -1755,6 +1760,7 @@ class MainWindow(QMainWindow):
             QApplication.alert(self, 0)
 
     def _on_intervention(self, pending: PendingDecision) -> None:
+        self.job_panel.set_covered(True)          # the job waits for this answer: the banner takes its place
         self.banner.ask(pending)
         iv = pending.intervention
         if bool(pref("tray")) and self.tray.isVisible():
@@ -2135,6 +2141,9 @@ class MainWindow(QMainWindow):
                 label.setPixmap(icons.pixmap(name, int(size), icons._tint(role)))
         for index, name in enumerate(self.TAB_ICONS):
             self.tabs.setTabIcon(index, icons.icon(name))
+        mark = icons.owner_pixmap(self.BRAND_HEIGHT)
+        if self.brand is not None and mark is not None:
+            self.brand.setPixmap(mark)
         self.welcome_admin.setStyleSheet(f"color:{current().warn}")
         self.sources.viewport().update()
 
@@ -2160,10 +2169,21 @@ class MainWindow(QMainWindow):
             self._show_overview()
 
     def _apply_row_heights(self) -> None:
-        """Rows sized for the text size and row spacing chosen in Settings."""
-        height = self.fontMetrics().height() + (6 if str(pref("density")) == "compact" else 12)
+        """Rows, and the log's time and code columns, sized for the text size, row spacing and
+        clock chosen in Settings."""
         for view in (self.activity, self.problems, self.results):
+            view.ensurePolished()               # the style sheet's text size, not the default one
+            height = view.fontMetrics().height() + (6 if str(pref("density")) == "compact" else 12)
             view.verticalHeader().setDefaultSectionSize(height)
+        for view in (self.activity, self.problems):
+            text, header = view.fontMetrics(), view.horizontalHeader()
+            bold = QFont(header.font())
+            bold.setWeight(QFont.Weight.DemiBold)
+            titles = QFontMetrics(bold)
+            for column, widest in ((0, widest_clock()), (3, "LB-000")):
+                title = str(view.model().headerData(column, Qt.Orientation.Horizontal))
+                header.resizeSection(column, max(text.horizontalAdvance(widest) + 22,
+                                                 titles.horizontalAdvance(title) + 22))
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.job is not None and self.job.kind in LONG_JOBS:

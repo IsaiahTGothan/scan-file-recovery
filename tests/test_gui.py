@@ -12,12 +12,16 @@ QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 QtCore = pytest.importorskip("PySide6.QtCore")
 
 from lifeboat.device.base import DeviceInfo  # noqa: E402
-from tests.conftest import image_path  # noqa: E402
+from tests.conftest import UI_FONT, image_path  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def app():
     instance = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    if UI_FONT:
+        from PySide6.QtGui import QFont
+
+        instance.setFont(QFont(UI_FONT))
     from lifeboat.ui import theme
 
     theme.apply(instance, "dark")
@@ -870,6 +874,99 @@ def test_job_panel_shows_progress(app):
     assert len(panel.graph.values) == 1  # one speed sample a second
     panel.finish()
     assert panel.isHidden()
+
+
+def test_keyboard_focus_is_ringed(app):
+    """Tab rings the button it moves to; a click doesn't (as Windows and macOS do)."""
+    from PySide6.QtTest import QTest
+
+    host = QtWidgets.QWidget()
+    layout = QtWidgets.QVBoxLayout(host)
+    first, second = QtWidgets.QPushButton("First"), QtWidgets.QCheckBox("Second")
+    layout.addWidget(first)
+    layout.addWidget(second)
+    host.show()
+    _pump(app, 0.1)
+    QTest.mouseClick(second, QtCore.Qt.MouseButton.LeftButton)
+    _pump(app, 0.1)
+    assert second.hasFocus() and not second.property("keyfocus")
+    plain = first.grab().toImage()
+    first.setFocus(QtCore.Qt.FocusReason.TabFocusReason)
+    _pump(app, 0.1)
+    assert first.property("keyfocus") is True
+    assert first.grab().toImage() != plain           # the ring shows
+    QTest.mouseClick(second, QtCore.Qt.MouseButton.LeftButton)
+    _pump(app, 0.1)
+    assert second.hasFocus() and not second.property("keyfocus")
+    assert not first.property("keyfocus")
+    assert first.grab().toImage() == plain
+    host.close()
+
+
+def test_owner_logo_follows_the_theme(app):
+    """The developer's logo, white on transparent, is drawn in the theme's text colour: white on the
+    dark theme, dark on the light one (white would vanish there)."""
+    from lifeboat.branding import owner_logo
+    from lifeboat.ui import icons, theme
+
+    if owner_logo() is None:
+        pytest.skip("no owner logo in lifeboat/assets")
+    try:
+        for name in ("dark", "light"):
+            colours = theme.apply(app, name)
+            icons.clear_cache()
+            image = icons.owner_pixmap(24).toImage()
+            assert image.height() >= 24
+            seen = {image.pixelColor(x, y).name() for y in range(image.height()) for x in range(image.width())
+                    if image.pixelColor(x, y).alpha() == 255}
+            assert seen == {colours.text.lower()}
+    finally:
+        theme.apply(app, "dark")
+        icons.clear_cache()
+
+
+def test_the_banner_takes_the_job_panels_place(app):
+    """A job that needs an answer (the drive disconnected) shows the banner where its progress was,
+    and its progress again once answered; long texts shorten with "…" and show whole in tooltips."""
+    from lifeboat.errors import Cancelled
+    from lifeboat.events import Choice, Intervention, Progress
+    from lifeboat.ui.main_window import MainWindow
+
+    path = "Users/alex/Pictures/Photos Library.photoslibrary/originals/7/" + "7F3A9C21-5B8E-4D2A" * 6 + ".heic"
+    answers = []
+
+    def work(job):
+        job.report(Progress("Recovering files", 10, 100, item=path))
+        answers.append(job.handler.request(Intervention(
+            "LB-120", "Source drive disconnected", "Reconnect it.", (Choice.RETRY, Choice.ABORT),
+            auto_retry=lambda: False)))
+        job.report(Progress("Recovering files", 20, 100, item=path))
+        while not job.control.cancelled:
+            time.sleep(0.02)
+        raise Cancelled()
+
+    window = MainWindow()
+    window.resize(1000, 700)
+    window.show()
+    window._start("recover", "Recovering 3 files", work)
+    end = time.time() + 10
+    while not window.banner.isVisible() and time.time() < end:
+        _pump(app, 0.05)
+    assert window.banner.isVisible()
+    assert window.banner.title.text() == "Source drive disconnected — waiting for it…"
+    assert window.job_panel.active and window.job_panel.isHidden()
+    status = window.status_text
+    assert status.text().endswith(path) and status.shown_text() != status.text() and status.toolTip() == status.text()
+    next(b for b in window.banner.findChildren(QtWidgets.QPushButton) if b.text() == "Retry").click()
+    end = time.time() + 10
+    while window.job_panel.percent.text() != "20.0%" and time.time() < end:
+        _pump(app, 0.05)
+    assert answers == [Choice.RETRY]
+    assert window.banner.isHidden() and window.job_panel.isVisible()
+    assert window.job_panel.percent.text() == "20.0%"
+    window.job.control.cancel()
+    _wait(app, window)
+    assert window.job_panel.isHidden() and not window.job_panel.active
 
 
 def test_unlock_an_encrypted_mac_volume(app, disks, monkeypatch):

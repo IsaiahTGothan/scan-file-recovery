@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from PySide6.QtGui import QColor, QFont, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtGui import QColor, QFocusEvent, QFont, QPalette
+from PySide6.QtWidgets import QAbstractButton, QApplication
 
 from ..branding import ACCENT
 
@@ -35,6 +36,10 @@ class Theme:
     map_bad: str
     accent_hover: str = "#ff7d36"
     accent_2: str = "#ffb03a"          # where accent gradients end
+    # Set by readable(): the accent behind accent_text (buttons), and as text on the panels.
+    accent_fill: str = ""
+    accent_fill_hover: str = ""
+    accent_ink: str = ""
 
 
 # Accent colour choices (Settings > Appearance): key -> (name, accent, hover, gradient end).
@@ -47,6 +52,46 @@ ACCENTS: dict[str, tuple[str, str, str, str]] = {
 }
 
 
+def _luminance(hex_value: str) -> float:
+    colour = QColor(hex_value)
+
+    def channel(value: int) -> float:
+        c = value / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * channel(colour.red()) + 0.7152 * channel(colour.green()) + 0.0722 * channel(colour.blue())
+
+
+def contrast(a: str, b: str) -> float:
+    """WCAG contrast ratio of two colours (1 to 21; text needs 4.5)."""
+    light, dark = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+def _toward(hex_value: str, target: str, against: tuple[str, ...], ratio: float) -> str:
+    """``hex_value`` mixed with ``target`` (black or white) just enough to reach ``ratio`` against
+    every colour in ``against``."""
+    start, end = QColor(hex_value), QColor(target)
+    for step in range(41):
+        f = step / 40
+        mixed = QColor(round(start.red() + (end.red() - start.red()) * f),
+                       round(start.green() + (end.green() - start.green()) * f),
+                       round(start.blue() + (end.blue() - start.blue()) * f)).name()
+        if all(contrast(mixed, other) >= ratio for other in against):
+            return mixed
+    return target
+
+
+def readable(t: Theme) -> Theme:
+    """The accent as it can be read: buttons dark enough for their white text, and accent-coloured
+    text that stands out from the panels (WCAG AA, 4.5:1). Borders, bars and icons keep the accent."""
+    fill = _toward(t.accent, "#000000", (t.accent_text,), 4.6)
+    backgrounds = (t.window, t.panel, t.panel_alt, t.raised)
+    away = "#ffffff" if t.name == "dark" else "#000000"
+    return replace(t, accent_fill=fill, accent_fill_hover=_toward(fill, "#000000", (t.accent_text,), 5.6),
+                   accent_ink=_toward(t.accent, away, backgrounds, 4.6))
+
+
 def rgba(hex_value: str, alpha: float) -> str:
     """A colour with transparency, for style sheets: rgba(r, g, b, a)."""
     colour = QColor(hex_value)
@@ -57,7 +102,7 @@ DARK = Theme(
     name="dark",
     window="#0d1520", panel="#131e2c", panel_alt="#172435", raised="#1c2b3e", border="#24364c",
     text="#e7edf5", muted="#93a6bd", accent=ACCENT, accent_text="#ffffff",
-    ok="#3fbf7f", warn="#f2b035", bad="#f05252", info="#5aa9ff", selection="#25456b",
+    ok="#3fbf7f", warn="#f2b035", bad="#f26363", info="#5aa9ff", selection="#25456b",
     map_untried="#2a3a4f", map_good="#2f9e66", map_partial="#7fd1a6", map_skipped="#c9a227",
     map_failed="#f08a24", map_bad="#e5484d",
 )
@@ -66,7 +111,7 @@ LIGHT = Theme(
     name="light",
     window="#eef2f6", panel="#ffffff", panel_alt="#f6f8fb", raised="#ffffff", border="#d6dee8",
     text="#122033", muted="#5b6b80", accent=ACCENT, accent_text="#ffffff",
-    ok="#16803c", warn="#a15c00", bad="#c62828", info="#1f6fd1", selection="#cfe3ff",
+    ok="#147536", warn="#a15c00", bad="#c62828", info="#1c66c2", selection="#cfe3ff",
     map_untried="#d9e1ea", map_good="#2f9e66", map_partial="#9fdcbc", map_skipped="#e2c04f",
     map_failed="#f08a24", map_bad="#d93036",
 )
@@ -125,9 +170,9 @@ QPushButton {{ background: {t.raised}; color: {t.text}; border: 1px solid {t.bor
 QPushButton:hover {{ border-color: {t.accent}; }}
 QPushButton:pressed {{ background: {t.panel_alt}; }}
 QPushButton:disabled {{ color: {t.muted}; background: {t.panel}; border-color: {t.border}; }}
-QPushButton[primary="true"] {{ background: {t.accent}; color: {t.accent_text}; border: 1px solid {t.accent};
-  font-weight: 700; }}
-QPushButton[primary="true"]:hover {{ background: {t.accent_hover}; border-color: {t.accent_hover}; }}
+QPushButton[primary="true"] {{ background: {t.accent_fill}; color: {t.accent_text};
+  border: 1px solid {t.accent_fill}; font-weight: 700; }}
+QPushButton[primary="true"]:hover {{ background: {t.accent_fill_hover}; border-color: {t.accent}; }}
 QPushButton[primary="true"]:disabled {{ background: {t.raised}; color: {t.muted}; border-color: {t.border}; }}
 QPushButton[danger="true"] {{ color: {t.bad}; border-color: {t.bad}; }}
 QToolButton {{ background: transparent; color: {t.text}; border: 1px solid transparent; border-radius: 8px;
@@ -204,16 +249,16 @@ QListWidget#SettingsNav::item:selected {{ background: {t.selection}; color: {t.t
 #SettingsCard {{ background: {t.panel}; border: 1px solid {t.border}; border-radius: 12px; }}
 #Divider {{ background: {t.border}; border: none; max-height: 1px; min-height: 1px; }}
 #SettingsSearch {{ border-radius: 9px; }}
-#Badge {{ background: {rgba(t.accent, 0.14)}; color: {t.accent}; border: 1px solid {rgba(t.accent, 0.55)};
+#Badge {{ background: {rgba(t.accent, 0.14)}; color: {t.accent_ink}; border: 1px solid {rgba(t.accent, 0.55)};
   border-radius: 7px; padding: 2px 8px; font-size: {points * 0.75:.1f}pt; font-weight: 800; }}
 #SoonPill {{ background: {rgba(t.warn, 0.14)}; color: {t.warn}; border: 1px solid {rgba(t.warn, 0.45)};
   border-radius: 6px; padding: 1px 7px; font-size: {points * 0.72:.1f}pt; font-weight: 800; }}
-#PopularPill {{ background: {t.accent}; color: {t.accent_text}; border-radius: 7px; padding: 2px 9px;
+#PopularPill {{ background: {t.accent_fill}; color: {t.accent_text}; border-radius: 7px; padding: 2px 9px;
   font-size: {points * 0.75:.1f}pt; font-weight: 800; }}
 QPushButton[upgrade="true"] {{ background: {rgba(t.accent, 0.10)}; color: {t.text}; border: 1px solid {t.accent};
   font-weight: 700; }}
 QPushButton[upgrade="true"]:hover {{ background: {rgba(t.accent, 0.22)}; }}
-#StepNumber {{ color: {t.accent}; font-size: {points * 1.8:.1f}pt; font-weight: 800; }}
+#StepNumber {{ color: {t.accent_ink}; font-size: {points * 1.8:.1f}pt; font-weight: 800; }}
 #StepCard {{ background: {t.panel_alt}; border: 1px solid {t.border}; border-radius: 12px; }}
 #PromoCard {{ border: 1px solid {rgba(t.accent, 0.6)}; border-radius: 12px;
   background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {rgba(t.accent, 0.16)}, stop:0.6 {t.panel},
@@ -231,10 +276,10 @@ QPushButton[upgrade="true"]:hover {{ background: {rgba(t.accent, 0.22)}; }}
 #PlanName {{ font-size: {points * 1.3:.1f}pt; font-weight: 800; }}
 #PlanPrice {{ font-size: {points * 2.6:.1f}pt; font-weight: 800; }}
 #Segmented {{ background: {t.panel_alt}; border: 1px solid {t.border}; border-radius: 18px; }}
-#Segmented QToolButton {{ border: none; border-radius: 15px; padding: 6px 18px; color: {t.muted};
+#Segmented QToolButton {{ border: 1px solid transparent; border-radius: 15px; padding: 5px 17px; color: {t.muted};
   background: transparent; font-weight: 600; }}
 #Segmented QToolButton:hover {{ color: {t.text}; }}
-#Segmented QToolButton:checked {{ background: {t.accent}; color: {t.accent_text}; font-weight: 700; }}
+#Segmented QToolButton:checked {{ background: {t.accent_fill}; color: {t.accent_text}; font-weight: 700; }}
 #Notice {{ background: {rgba(t.info, 0.12)}; border: 1px solid {rgba(t.info, 0.5)}; border-radius: 10px; }}
 #AboutHero {{ border-radius: 14px; border: 1px solid {t.border};
   background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {rgba(t.accent, 0.20)}, stop:0.55 {t.panel},
@@ -322,6 +367,37 @@ QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image: url("{paths['down']}"
 """
 
 
+def _focus_rules(t: Theme) -> str:
+    """The ring around the control the keyboard focus is on (see FocusRings)."""
+    return f"""
+QPushButton[keyfocus="true"], QToolButton[keyfocus="true"], QToolButton#Chip[keyfocus="true"],
+QToolButton#TickButton[keyfocus="true"], #Segmented QToolButton[keyfocus="true"],
+QPushButton[primary="true"][keyfocus="true"] {{ border: 1px solid {t.text}; }}
+QCheckBox[keyfocus="true"], QRadioButton[keyfocus="true"] {{ background: {rgba(t.accent, 0.18)}; border-radius: 6px; }}
+"""
+
+
+class FocusRings(QObject):
+    """Rings the button, check box or radio button the keyboard focus moves to (Tab, a shortcut), as
+    Windows and macOS do. A click doesn't ring it. (With a style sheet, Qt shows no focus at all.)"""
+
+    KEYBOARD = (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason,
+                Qt.FocusReason.ShortcutFocusReason)
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        kind = event.type()
+        if kind in (QEvent.Type.FocusIn, QEvent.Type.FocusOut) and isinstance(obj, QAbstractButton):
+            ring = kind == QEvent.Type.FocusIn and isinstance(event, QFocusEvent) and event.reason() in self.KEYBOARD
+            if bool(obj.property("keyfocus")) != ring:
+                obj.setProperty("keyfocus", ring)
+                obj.style().unpolish(obj)
+                obj.style().polish(obj)
+        return False
+
+
+_focus_rings: FocusRings | None = None
+
+
 def apply(app: QApplication, name: str = "dark", text_size: str = "normal", density: str = "comfortable",
           accent: str = "lifeboat") -> Theme:
     global _current
@@ -337,6 +413,7 @@ def apply(app: QApplication, name: str = "dark", text_size: str = "normal", dens
     if accent in ACCENTS and accent != "lifeboat":
         _name, colour, hover, end = ACCENTS[accent]
         theme = replace(theme, accent=colour, accent_hover=hover, accent_2=end)
+    theme = readable(theme)
     _current = theme
     app.setStyle("Fusion")
     app.setPalette(_palette(theme))
@@ -344,7 +421,11 @@ def apply(app: QApplication, name: str = "dark", text_size: str = "normal", dens
         indicators = _indicator_rules(_indicator_files(theme))
     except Exception:  # noqa: BLE001 - fall back to the default indicators
         indicators = ""
-    app.setStyleSheet(stylesheet(theme, text_size, density) + indicators)
+    app.setStyleSheet(stylesheet(theme, text_size, density) + indicators + _focus_rules(theme))
+    global _focus_rings
+    if _focus_rings is None:
+        _focus_rings = FocusRings(app)
+        app.installEventFilter(_focus_rings)
     font = app.font()
     font.setPointSizeF(TEXT_SIZES.get(text_size, 10.0))
     font.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)

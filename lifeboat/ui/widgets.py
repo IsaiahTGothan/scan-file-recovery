@@ -63,6 +63,7 @@ from .models import category, category_icon, chance, status_text
 from .theme import current
 
 ROLE_INFO = Qt.ItemDataRole.UserRole + 1
+QWIDGETSIZE_MAX = (1 << 24) - 1      # Qt's "no maximum size"
 
 
 # --------------------------------------------------------------------- sources
@@ -655,6 +656,7 @@ class Banner(QFrame):
     """Red/amber bar for situations that need the user (disconnects, full disk)."""
 
     answered = Signal(object, object)  # PendingDecision, Choice
+    closed = Signal()                  # answered, or the problem cleared up by itself
 
     LABELS = {Choice.RETRY: "Retry", Choice.SKIP: "Skip this file", Choice.ABORT: "Stop"}
 
@@ -669,13 +671,12 @@ class Banner(QFrame):
         layout.addWidget(self.glyph, 0, Qt.AlignmentFlag.AlignTop)
         texts = QVBoxLayout()
         texts.setSpacing(2)
-        self.title = QLabel()
+        self.title = WrapLabel()
         font = self.title.font()
         font.setBold(True)
         font.setPointSizeF(font.pointSizeF() + 1)
         self.title.setFont(font)
-        self.message = QLabel()
-        self.message.setWordWrap(True)
+        self.message = WrapLabel()
         texts.addWidget(self.title)
         texts.addWidget(self.message)
         layout.addLayout(texts, 1)
@@ -692,7 +693,7 @@ class Banner(QFrame):
         self.style().unpolish(self)
         self.style().polish(self)
         self.glyph.setPixmap(icons.pixmap("warning", 28, "#ffffff"))
-        waiting = " Waiting for it…" if iv.auto_retry is not None else ""
+        waiting = " \u2014 waiting for it\u2026" if iv.auto_retry is not None else ""
         self.title.setText(f"{iv.title}{waiting}")
         self.message.setText(f"{iv.message}  [{iv.code}]")
         while self.buttons.count():
@@ -713,11 +714,13 @@ class Banner(QFrame):
         if pending is not None:
             pending.answer_with(choice)
             self.answered.emit(pending, choice)
+        self.closed.emit()
 
     def resolve(self, pending: PendingDecision) -> None:
         if self.pending is pending:
             self.hide()
             self.pending = None
+            self.closed.emit()
 
 
 # ------------------------------------------------------------------- preview
@@ -747,12 +750,12 @@ class PreviewPane(QFrame):
         self.facts.setTextFormat(Qt.TextFormat.RichText)
         self.facts.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         head_layout.addWidget(self.facts)
-        self.details = ScrollBody(head, least=64)       # a short pane scrolls the details
+        self.details = ScrollBody(head, least=52)       # a short pane scrolls the details
         layout.addWidget(self.details)
         self.stack = QStackedWidget()
         self.picture = QLabel()
         self.picture.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.picture.setMinimumHeight(56)         # the picture is scaled to whatever room there is
+        self.picture.setMinimumHeight(40)         # the picture is scaled to whatever room there is
         self.text = QPlainTextEdit()
         self.text.setReadOnly(True)
         self.text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -766,7 +769,7 @@ class PreviewPane(QFrame):
         self.stack.addWidget(self.message)
         self.stack.addWidget(self.picture)
         self.stack.addWidget(self.text)
-        self.stack.setMinimumHeight(56)
+        self.stack.setMinimumHeight(40)
         # The preview takes what the details leave, never the other way round.
         self.stack.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
         layout.addWidget(self.stack, 1)
@@ -903,10 +906,18 @@ class PreviewPane(QFrame):
 def fit_height(window: QWidget) -> None:
     """Make a window at least as tall as its content needs at its current width. Qt's size hints
     don't count the lines that wrapped text takes, so without this a window opens too short and
-    squeezes its text."""
+    squeezes its text. A window given a ``least_width`` (keep_text_whole) is also kept at least as
+    wide as its content needs: a minimum width set on a window wins over its content's."""
     layout = window.layout()
     if layout is None:
         return
+    least = int(window.property("least_width") or 0)
+    if least:
+        width = max(least, layout.totalMinimumSize().width())
+        if window.minimumWidth() != width:
+            window.setMinimumWidth(width)
+        if window.width() < width:
+            window.resize(width, window.height())
     need = layout.minimumSize().height()
     if layout.hasHeightForWidth():
         need = max(need, layout.heightForWidth(window.width()))
@@ -939,53 +950,93 @@ class _KeepTextWhole(QObject):
 
 
 def keep_text_whole(window: QWidget) -> None:
-    """Keep ``window`` (a dialog) tall enough for its wrapped text, however wide it is made."""
+    """Keep ``window`` (a dialog) tall enough for its wrapped text, however wide it is made, and
+    as wide as its content needs when that is more than the minimum width it was given (a row of
+    buttons, a warning that appears later). A fixed width stays fixed."""
+    if window.minimumWidth() and window.maximumWidth() >= QWIDGETSIZE_MAX:
+        window.setProperty("least_width", window.minimumWidth())
     _KeepTextWhole(window)
 
 
-class ScrollBody(QScrollArea):
+class ScrollArea(QScrollArea):
+    """A scroll area that keeps up with its content (pages, and the boxes below). A plain
+    QScrollArea sizes its content only when the area itself is resized: text set later (the
+    "not running as administrator" note, a file's details) was squeezed into the old size, and a
+    scroll bar that appeared stayed after everything fit again."""
+
+    def __init__(self, content: QWidget) -> None:
+        super().__init__()
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)   # content wraps instead
+        self.setWidget(content)
+        content.installEventFilter(self)
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        if obj is self.widget() and event.type() == QEvent.Type.LayoutRequest:
+            self.content_changed()
+        return super().eventFilter(obj, event)
+
+    def content_changed(self) -> None:
+        # A LayoutRequest makes QScrollArea size the content again and set its scroll bar up.
+        QApplication.postEvent(self, QEvent(QEvent.Type.LayoutRequest))
+
+    def event(self, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.LayoutRequest:
+            self._choose_scroll_bar()
+        return super().event(event)
+
+    def resizeEvent(self, event: QEvent) -> None:
+        self._choose_scroll_bar()
+        super().resizeEvent(event)  # type: ignore[arg-type]
+
+    def content_height(self, width: int) -> int:
+        """How tall the content needs to be at ``width``."""
+        content = self.widget()
+        if content is None:
+            return 0
+        need = content.minimumSizeHint().height()
+        if content.hasHeightForWidth():
+            need = max(need, content.heightForWidth(width))
+        return need
+
+    def _choose_scroll_bar(self) -> None:
+        # A scroll bar only while the content doesn't fit at the full width. (Otherwise one that
+        # appeared would stay: the narrower room it leaves makes the content need more height.)
+        room = self.maximumViewportSize()
+        fits = self.content_height(room.width()) <= room.height()
+        policy = Qt.ScrollBarPolicy.ScrollBarAlwaysOff if fits else Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        if self.verticalScrollBarPolicy() != policy:
+            self.setVerticalScrollBarPolicy(policy)
+
+
+class ScrollBody(ScrollArea):
     """Content that keeps its natural size and scrolls when there isn't room for all of it, rather
     than being squeezed. It asks for its content's full height, so a window opens tall enough for
     everything when the screen allows."""
 
     def __init__(self, content: QWidget, least: int = 120) -> None:
-        super().__init__()
+        super().__init__(content)
         self.least = least              # the height it can shrink to (then it scrolls)
         self.setObjectName("Clear")
-        self.setWidgetResizable(True)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         if not content.objectName():
             content.setObjectName("ClearInner")
-        self.setWidget(content)
-        content.installEventFilter(self)
         policy = self.sizePolicy()
         policy.setHeightForWidth(True)
         self.setSizePolicy(policy)
 
-    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        # The content changed size (new text): ask the layout around for room again. A scroll
-        # area doesn't pass that on by itself, so it would keep the size of its first content.
-        if obj is self.widget() and event.type() == QEvent.Type.LayoutRequest:
-            self.updateGeometry()
-        return super().eventFilter(obj, event)
-
-    def _content_height(self, width: int) -> int:
-        content = self.widget()
-        if content is None:
-            return 0
-        if content.hasHeightForWidth():
-            return content.heightForWidth(width)
-        return content.sizeHint().height()
+    def content_changed(self) -> None:
+        # New content may need another height: ask the layout around for it, too.
+        self.updateGeometry()
+        super().content_changed()
 
     def hasHeightForWidth(self) -> bool:
         return True
 
     def heightForWidth(self, width: int) -> int:
-        # Measured as if the scroll bar took its share of the width: given this height, the
-        # content fits even then, so a scroll bar that once appeared goes away again.
-        bar = self.verticalScrollBar().sizeHint().width()
-        return self._content_height(max(1, width - bar)) + 2 * self.frameWidth()
+        content = self.widget()
+        natural = 0 if content is None or content.hasHeightForWidth() else content.sizeHint().height()
+        return max(natural, self.content_height(width)) + 2 * self.frameWidth()
 
     def sizeHint(self) -> QSize:
         content = self.widget()
@@ -996,6 +1047,73 @@ class ScrollBody(QScrollArea):
         content = self.widget()
         width = content.minimumSizeHint().width() if content is not None else 0
         return QSize(width, min(self.least, self.heightForWidth(max(width, self.width()))))
+
+
+class ElidedLabel(QLabel):
+    """One line of text that may be longer than the room for it (a folder path, the file being
+    copied): shortened with "…" where it doesn't fit and shown whole in its tooltip. It asks for
+    the room its whole text needs but makes do with less, so it never widens or squeezes its
+    window."""
+
+    def __init__(self, text: str = "", mode: Qt.TextElideMode = Qt.TextElideMode.ElideRight) -> None:
+        super().__init__()
+        self.mode = mode
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        super().setText(text)
+        self._update_tip()
+
+    def shown_text(self) -> str:
+        """The text as it fits."""
+        return self.fontMetrics().elidedText(self.text(), self.mode, self.contentsRect().width())
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        return QSize(min(hint.width(), self.fontMetrics().horizontalAdvance("Abc…xyz")), hint.height())
+
+    def resizeEvent(self, event: QEvent) -> None:
+        super().resizeEvent(event)  # type: ignore[arg-type]
+        self._update_tip()
+
+    def _update_tip(self) -> None:
+        whole = self.shown_text() == self.text()
+        self.setToolTip("" if whole else self.text())
+
+    def paintEvent(self, _event: QEvent) -> None:
+        painter = QPainter(self)
+        self.drawFrame(painter)
+        self.style().drawItemText(painter, self.contentsRect(), self.alignment(), self.palette(),
+                                  self.isEnabled(), self.shown_text(), self.foregroundRole())
+
+
+class WrapLabel(QLabel):
+    """Wrapped text whose minimum height is what all its lines need at its width. Qt counts a
+    single line, so a window made as short as it allows cut the other lines off."""
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self.setWordWrap(True)
+        self._width = 0           # laid out at; 0 until it has been
+
+    def minimumSizeHint(self) -> QSize:
+        hint = super().minimumSizeHint()
+        if self._width > 0 and self.text():
+            hint.setHeight(max(hint.height(), self.heightForWidth(self._width)))
+        return hint
+
+    def setText(self, text: str) -> None:  # type: ignore[override]
+        super().setText(text)
+        self.updateGeometry()
+
+    def resizeEvent(self, event: QEvent) -> None:
+        super().resizeEvent(event)  # type: ignore[arg-type]
+        if self.width() != self._width:
+            before = self.heightForWidth(self._width) if self._width > 0 else -1
+            self._width = self.width()
+            if self.heightForWidth(self._width) != before:
+                self.updateGeometry()
 
 
 class CardGrid(QWidget):
@@ -1037,6 +1155,46 @@ class CardGrid(QWidget):
     def resizeEvent(self, event: QEvent) -> None:
         super().resizeEvent(event)  # type: ignore[arg-type]
         self._arrange(self.columns_for(self.width()))
+
+
+class SideBySide(QWidget):
+    """Text and its buttons side by side, or the buttons under the text when the room is too
+    narrow for both (the text keeps at least ``least`` pixels)."""
+
+    def __init__(self, first: QWidget, second: QWidget, least: int = 360, spacing: int = 14) -> None:
+        super().__init__()
+        self.first, self.second, self.least = first, second, least
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(spacing)
+        self.grid.setVerticalSpacing(10)
+        self.grid.setColumnStretch(0, 1)
+        self.stacked: bool | None = None
+        self._arrange(False)
+
+    def _arrange(self, stacked: bool) -> None:
+        if stacked == self.stacked:
+            return
+        self.stacked = stacked
+        self.grid.removeWidget(self.second)
+        self.grid.removeWidget(self.first)
+        self.grid.addWidget(self.first, 0, 0)
+        if stacked:
+            self.grid.addWidget(self.second, 1, 0, Qt.AlignmentFlag.AlignLeft)
+        else:
+            self.grid.addWidget(self.second, 0, 1, Qt.AlignmentFlag.AlignVCenter)
+
+    def side_by_side_width(self) -> int:
+        first = max(self.least, self.first.minimumSizeHint().width())
+        return first + self.grid.horizontalSpacing() + self.second.sizeHint().width()
+
+    def minimumSizeHint(self) -> QSize:
+        width = max(self.first.minimumSizeHint().width(), self.second.minimumSizeHint().width())
+        return QSize(width, super().minimumSizeHint().height())
+
+    def resizeEvent(self, event: QEvent) -> None:
+        super().resizeEvent(event)  # type: ignore[arg-type]
+        self._arrange(self.width() < self.side_by_side_width())
 
 
 class FlowLayout(QLayout):
@@ -1091,20 +1249,25 @@ class FlowLayout(QLayout):
     def _place(self, rect: QRect, move: bool) -> int:
         margins = self.contentsMargins()
         area = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
-        x, y, line = area.x(), area.y(), 0
+        lines: list[list[tuple[QLayoutItem, int, QSize]]] = [[]]       # (item, x, size) per line
+        x = area.x()
         for item in self._items:
             if item.widget() is not None and item.widget().isHidden():
                 continue
             hint = item.sizeHint()
-            if x + hint.width() > area.right() + 1 and line > 0:
+            if x + hint.width() > area.right() + 1 and lines[-1]:
+                lines.append([])
                 x = area.x()
-                y += line + self._spacing
-                line = 0
-            if move:
-                item.setGeometry(QRect(QPoint(x, y), hint))
+            lines[-1].append((item, x, hint))
             x += hint.width() + self._spacing
-            line = max(line, hint.height())
-        return y + line - rect.y() + margins.bottom()
+        y = area.y()
+        for number, line in enumerate(lines):
+            height = max((hint.height() for _item, _x, hint in line), default=0)
+            if move:
+                for item, left, hint in line:        # centred on the line (a label next to taller chips)
+                    item.setGeometry(QRect(QPoint(left, y + (height - hint.height()) // 2), hint))
+            y += height + (self._spacing if number < len(lines) - 1 else 0)
+        return y - rect.y() + margins.bottom()
 
 
 class PaddedDelegate(QStyledItemDelegate):
@@ -1237,9 +1400,9 @@ class JobPanel(QFrame):
         top.addWidget(self.glyph, 0, Qt.AlignmentFlag.AlignTop)
         texts = QVBoxLayout()
         texts.setSpacing(0)
-        self.title = QLabel()
+        self.title = ElidedLabel()
         self.title.setObjectName("JobTitle")
-        self.phase = QLabel()
+        self.phase = ElidedLabel(mode=Qt.TextElideMode.ElideMiddle)     # keeps the file name in view
         self.phase.setProperty("muted", True)
         texts.addWidget(self.title)
         texts.addWidget(self.phase)
@@ -1264,6 +1427,8 @@ class JobPanel(QFrame):
         metrics = QHBoxLayout(self.metrics_box)
         metrics.setContentsMargins(0, 0, 0, 0)
         metrics.setSpacing(28)
+        self.active = False         # a job is running: shown, unless the banner has its place
+        self.covered = False
         self.speed = _Metric("Speed")
         self.graph = Sparkline()
         self.graph.setToolTip("Reading speed over the last two minutes")
@@ -1302,7 +1467,14 @@ class JobPanel(QFrame):
         for metric in (self.speed, self.left, self.done, self.items, self.bad):
             metric.set("-")
         self.items.setVisible(False)
-        self.setVisible(True)
+        self.active = True
+        self.setVisible(not self.covered)
+
+    def set_covered(self, covered: bool) -> None:
+        """While the job waits for an answer, the banner asking for it takes the panel's place
+        (both at once didn't fit a laptop screen)."""
+        self.covered = covered
+        self.setVisible(self.active and not covered)
 
     def update_progress(self, p: Progress, paused: bool = False) -> None:
         t = current()
@@ -1333,6 +1505,7 @@ class JobPanel(QFrame):
                      t.bad if p.bad_bytes else t.ok)
 
     def finish(self) -> None:
+        self.active = False
         self.setVisible(False)
 
 

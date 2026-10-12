@@ -23,7 +23,7 @@ from ..events import Event, Level
 from ..fs.apfs import LockedVolume
 from ..fs.model import F, Node
 from ..recover.engine import FileTask, Status
-from ..util import display_time, format_size
+from ..util import display_clock, display_time, format_size
 from . import icons
 from .theme import current
 
@@ -678,9 +678,7 @@ class EventModel(QAbstractTableModel):
         t = current()
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0:
-                import time as _time
-
-                return _time.strftime("%H:%M:%S", _time.localtime(event.timestamp))
+                return display_clock(event.timestamp)
             if col == 2:
                 return event.message
             if col == 3:

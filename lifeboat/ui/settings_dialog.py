@@ -25,7 +25,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QScrollArea,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -38,7 +37,7 @@ from ..logsetup import log_dir
 from . import icons
 from .dialogs import DEFAULTS, pref, settings
 from .theme import ACCENTS, current
-from .widgets import Toggle, pill
+from .widgets import ScrollArea, Toggle, pill
 
 # (key, label) choices of each list setting, in display order
 CHOICES: dict[str, list[tuple[str, str]]] = {
@@ -166,12 +165,10 @@ class _Section(QFrame):
         return visible
 
 
-class _Page(QScrollArea):
+class _Page(ScrollArea):
     def __init__(self, title: str, intro: str = "") -> None:
-        super().__init__()
-        self.setWidgetResizable(True)
-        self.setFrameShape(QFrame.Shape.NoFrame)
         inner = QWidget()
+        super().__init__(inner)          # follows the rows a search shows and hides
         self.column = QVBoxLayout(inner)
         self.column.setContentsMargins(4, 0, 10, 8)
         self.column.setSpacing(14)
@@ -182,7 +179,6 @@ class _Page(QScrollArea):
             self.column.addWidget(_hint(intro))
         self.sections: list[_Section] = []
         self.title = title
-        self.setWidget(inner)
 
     def section(self, title: str, hint: str = "") -> _Section:
         section = _Section(title, hint)
