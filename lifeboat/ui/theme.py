@@ -388,13 +388,19 @@ class FocusRings(QObject):
                 Qt.FocusReason.ShortcutFocusReason)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        kind = event.type()
-        if kind in (QEvent.Type.FocusIn, QEvent.Type.FocusOut) and isinstance(obj, QAbstractButton):
-            ring = kind == QEvent.Type.FocusIn and isinstance(event, QFocusEvent) and event.reason() in self.KEYBOARD
-            if bool(obj.property("keyfocus")) != ring:
-                obj.setProperty("keyfocus", ring)
-                obj.style().unpolish(obj)
-                obj.style().polish(obj)
+        # It sees every event of the application: it must never fail, not even for a widget
+        # that is being destroyed.
+        try:
+            kind = event.type()
+            if kind in (QEvent.Type.FocusIn, QEvent.Type.FocusOut) and isinstance(obj, QAbstractButton):
+                ring = (kind == QEvent.Type.FocusIn and isinstance(event, QFocusEvent)
+                        and event.reason() in self.KEYBOARD)
+                if bool(obj.property("keyfocus")) != ring:
+                    obj.setProperty("keyfocus", ring)
+                    obj.style().unpolish(obj)
+                    obj.style().polish(obj)
+        except Exception:  # noqa: BLE001
+            pass
         return False
 
 

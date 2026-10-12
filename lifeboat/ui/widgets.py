@@ -600,7 +600,7 @@ class ToastArea(QObject):
         host.installEventFilter(self)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        if obj is self.host and event.type() == QEvent.Type.Resize:
+        if event.type() == QEvent.Type.Resize and obj is getattr(self, "host", None):
             self._layout()
         return False
 
@@ -945,10 +945,14 @@ class _KeepTextWhole(QObject):
     WHEN = (QEvent.Type.Show, QEvent.Type.Resize, QEvent.Type.LayoutRequest)   # LayoutRequest: content changed
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        if obj is self.window and not self.busy and event.type() in self.WHEN:
+        # getattr: while the window is being destroyed, this object can be half gone already.
+        window = getattr(self, "window", None)
+        if obj is window and window is not None and not getattr(self, "busy", True) and event.type() in self.WHEN:
             self.busy = True
             try:
-                fit_height(self.window)
+                fit_height(window)
+            except RuntimeError:          # the window is on its way out
+                pass
             finally:
                 self.busy = False
         return False
@@ -978,9 +982,12 @@ class ScrollArea(QScrollArea):
         content.installEventFilter(self)
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
-        if obj is self.widget() and event.type() == QEvent.Type.LayoutRequest:
-            self.content_changed()
-        return super().eventFilter(obj, event)
+        try:
+            if event.type() == QEvent.Type.LayoutRequest and obj is self.widget():
+                self.content_changed()
+            return super().eventFilter(obj, event)
+        except RuntimeError:              # being destroyed
+            return False
 
     def content_changed(self) -> None:
         # A LayoutRequest makes QScrollArea size the content again and set its scroll bar up.

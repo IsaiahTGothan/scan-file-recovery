@@ -905,6 +905,35 @@ def test_search_says_when_nothing_matches_and_clearing_it_goes_back(app, disks):
     window.close()
 
 
+def test_theme_change_while_dialogs_are_destroyed(app, monkeypatch):
+    """Changing the theme or text size while dialogs are being destroyed raised from their event
+    filters (seen as an "Unexpected error" window)."""
+    import gc
+    import sys
+
+    errors: list = []
+    monkeypatch.setattr(sys, "excepthook", lambda *exc: errors.append(exc))
+    monkeypatch.setattr(sys, "unraisablehook", lambda info: errors.append(info))
+    from lifeboat.ui import dialogs as dl
+    from lifeboat.ui import theme
+    from lifeboat.ui.plans_dialog import PlansDialog
+    from lifeboat.ui.settings_dialog import SettingsDialog
+
+    disk = DeviceInfo(path="/dev/sdz", kind="disk", size=1 << 40, model="Disk", serial="1", bus="USB")
+    try:
+        for text in ("normal", "large", "normal"):
+            theme.apply(app, "dark", text)
+            for dialog in (SettingsDialog(None), PlansDialog(None), dl.AboutDialog(None), dl.WhatsNewDialog(None),
+                           dl.RecoverDialog(None, disk, 3, 3000, 0, 0, 1000), dl.ImageDialog(None, disk)):
+                dialog.show()
+                _pump(app, 0.05)
+                dialog.close()
+            gc.collect()
+    finally:
+        theme.apply(app, "dark")
+    assert not errors, errors
+
+
 def test_keyboard_focus_is_ringed(app):
     """Tab rings the button it moves to; a click doesn't (as Windows and macOS do)."""
     from PySide6.QtTest import QTest
