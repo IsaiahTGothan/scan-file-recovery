@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from PySide6.QtCore import QModelIndex, Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QColor, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QKeySequence, QResizeEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -242,6 +242,7 @@ class MainWindow(QMainWindow):
         title.setObjectName("AppTitle")
         subtitle = QLabel(TAGLINE)
         subtitle.setObjectName("AppSubtitle")
+        self.app_subtitle = subtitle
         titles.addWidget(title)
         titles.addWidget(subtitle)
         layout.addLayout(titles)
@@ -283,6 +284,7 @@ class MainWindow(QMainWindow):
                 brand.setPixmap(pix.scaledToHeight(30, Qt.TransformationMode.SmoothTransformation))
                 brand.setToolTip(f"{APP_FULL_NAME}, {CREDIT}")
                 layout.addWidget(brand)
+        self.header_bar = bar
         self.btn_settings = _tool("", "settings", "Settings (Ctrl+,)")
         self.btn_help = _tool("", "help", "Help: what's new, shortcuts, plans, about")
         self.btn_help.setObjectName("HelpButton")
@@ -908,6 +910,32 @@ class MainWindow(QMainWindow):
         from ..branding import PUBLISHER_URL
 
         QDesktopServices.openUrl(QUrl(PUBLISHER_URL))
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._fit_header()
+
+    def _fit_header(self) -> None:
+        """Keep the header in one piece in a narrow window: first the tool buttons show only their
+        icons (their tooltips say what they do), then the tagline and badge make room and Upgrade
+        becomes its star, then Recover leaves out the size."""
+        if not hasattr(self, "_recover_texts"):
+            self._recover_texts = ("Recover", "Recover")
+        full, short = self._recover_texts
+        tools = (self.btn_scan, self.btn_deep, self.btn_image, self.btn_open)
+        room = self.width()
+        for level in range(4):
+            style = (Qt.ToolButtonStyle.ToolButtonTextBesideIcon if level == 0
+                     else Qt.ToolButtonStyle.ToolButtonIconOnly)
+            for button in tools:
+                if button.toolButtonStyle() != style:
+                    button.setToolButtonStyle(style)
+            self.app_subtitle.setVisible(level < 2)
+            self.plan_badge.setVisible(level < 2)
+            self.btn_plans.setText("Upgrade" if level < 2 else "")
+            self.btn_recover.setText(full if level < 3 else short)
+            if self.header_bar.sizeHint().width() <= room:
+                break
 
     def _show_problems_tab(self) -> None:
         self.tabs.setCurrentIndex(1)
@@ -2001,9 +2029,11 @@ class MainWindow(QMainWindow):
         sel = self.selection
         if sel.count:
             hidden = f" ({sel.hidden_selected:,} not shown)" if sel.hidden_selected else ""
-            self.btn_recover.setText(f"Recover {sel.count:,} files · {format_size(sel.bytes)}{hidden}")
+            self._recover_texts = (f"Recover {sel.count:,} files · {format_size(sel.bytes)}{hidden}",
+                                   f"Recover {sel.count:,} files")
         else:
-            self.btn_recover.setText("Recover")
+            self._recover_texts = ("Recover", "Recover")
+        self._fit_header()
         self.tree.viewport().update()
         self.list.viewport().update()
         self._update_actions()

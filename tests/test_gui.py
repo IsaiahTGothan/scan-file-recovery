@@ -9,6 +9,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+QtCore = pytest.importorskip("PySide6.QtCore")
 
 from lifeboat.device.base import DeviceInfo  # noqa: E402
 from tests.conftest import image_path  # noqa: E402
@@ -1184,3 +1185,23 @@ def test_whats_new_shows_once_after_an_update(app, monkeypatch):
     labels = "".join(label.text() for label in dialog.findChildren(QtWidgets.QLabel))
     assert f"What's new in Lifeboat {version}" in labels
     assert len(notes) >= 3
+
+
+def test_header_fits_a_narrow_window(app):
+    """In a narrow window the header's buttons give up their labels before anything is cut short."""
+    import lifeboat.ui.main_window as mw
+
+    window = mw.MainWindow()
+    window.show()
+    window._recover_texts = ("Recover 8,508 files · 3.10 TB (12 not shown)", "Recover 8,508 files")
+    window.resize(window.minimumWidth(), 700)
+    _pump(app, 0.2)
+    window._fit_header()
+    assert window.header_bar.sizeHint().width() <= window.width()
+    assert window.btn_scan.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+    window.resize(1700, 900)
+    _pump(app, 0.2)
+    assert window.btn_scan.toolButtonStyle() == QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+    assert window.btn_plans.text() == "Upgrade" and not window.plan_badge.isHidden()
+    assert window.btn_recover.text().startswith("Recover 8,508 files ·")
+    window.close()
