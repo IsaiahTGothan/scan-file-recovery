@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from PySide6.QtGui import QColor, QFont, QPalette
 from PySide6.QtWidgets import QApplication
@@ -33,6 +33,24 @@ class Theme:
     map_skipped: str
     map_failed: str
     map_bad: str
+    accent_hover: str = "#ff7d36"
+    accent_2: str = "#ffb03a"          # where accent gradients end
+
+
+# Accent colour choices (Settings > Appearance): key -> (name, accent, hover, gradient end).
+ACCENTS: dict[str, tuple[str, str, str, str]] = {
+    "lifeboat": ("Lifeboat orange", ACCENT, "#ff7d36", "#ffb03a"),
+    "ocean": ("Ocean blue", "#2f7ff0", "#4b92f4", "#4fc3f7"),
+    "emerald": ("Emerald", "#12a877", "#22bc89", "#7be0b5"),
+    "violet": ("Violet", "#8b5cf6", "#9d74f8", "#c9b6fc"),
+    "rose": ("Rose", "#e8457a", "#ee6290", "#f9a8c4"),
+}
+
+
+def rgba(hex_value: str, alpha: float) -> str:
+    """A colour with transparency, for style sheets: rgba(r, g, b, a)."""
+    colour = QColor(hex_value)
+    return f"rgba({colour.red()}, {colour.green()}, {colour.blue()}, {alpha:.2f})"
 
 
 DARK = Theme(
@@ -109,7 +127,7 @@ QPushButton:pressed {{ background: {t.panel_alt}; }}
 QPushButton:disabled {{ color: {t.muted}; background: {t.panel}; border-color: {t.border}; }}
 QPushButton[primary="true"] {{ background: {t.accent}; color: {t.accent_text}; border: 1px solid {t.accent};
   font-weight: 700; }}
-QPushButton[primary="true"]:hover {{ background: #ff7d36; }}
+QPushButton[primary="true"]:hover {{ background: {t.accent_hover}; border-color: {t.accent_hover}; }}
 QPushButton[primary="true"]:disabled {{ background: {t.raised}; color: {t.muted}; border-color: {t.border}; }}
 QPushButton[danger="true"] {{ color: {t.bad}; border-color: {t.bad}; }}
 QToolButton {{ background: transparent; color: {t.text}; border: 1px solid transparent; border-radius: 8px;
@@ -173,7 +191,7 @@ QToolButton#TickButton::menu-button {{ border-left: 1px solid {t.border}; width:
 #MetricLabel {{ color: {t.muted}; font-size: {points * 0.85:.1f}pt; }}
 QProgressBar#JobBar {{ height: 12px; border-radius: 6px; }}
 QProgressBar#JobBar::chunk {{ border-radius: 5px; background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-  stop:0 {t.accent}, stop:1 #ffb03a); }}
+  stop:0 {t.accent}, stop:1 {t.accent_2}); }}
 QToolButton#Chip {{ background: {t.panel_alt}; border: 1px solid {t.border}; border-radius: 14px;
   padding: 4px 12px; color: {t.text}; }}
 QToolButton#Chip:hover {{ border-color: {t.accent}; }}
@@ -182,6 +200,51 @@ QListWidget#SettingsNav {{ background: {t.panel}; border: 1px solid {t.border}; 
 QListWidget#SettingsNav::item {{ padding: 8px 10px; border-radius: 7px; }}
 QListWidget#SettingsNav::item:selected {{ background: {t.selection}; color: {t.text}; }}
 #SettingHint {{ color: {t.muted}; font-size: {points * 0.9:.1f}pt; }}
+#SettingName {{ font-weight: 600; }}
+#SettingsCard {{ background: {t.panel}; border: 1px solid {t.border}; border-radius: 12px; }}
+#Divider {{ background: {t.border}; border: none; max-height: 1px; min-height: 1px; }}
+#SettingsSearch {{ border-radius: 9px; }}
+#Badge {{ background: {rgba(t.accent, 0.14)}; color: {t.accent}; border: 1px solid {rgba(t.accent, 0.55)};
+  border-radius: 7px; padding: 2px 8px; font-size: {points * 0.75:.1f}pt; font-weight: 800; }}
+#SoonPill {{ background: {rgba(t.warn, 0.14)}; color: {t.warn}; border: 1px solid {rgba(t.warn, 0.45)};
+  border-radius: 6px; padding: 1px 7px; font-size: {points * 0.72:.1f}pt; font-weight: 800; }}
+#PopularPill {{ background: {t.accent}; color: {t.accent_text}; border-radius: 7px; padding: 2px 9px;
+  font-size: {points * 0.75:.1f}pt; font-weight: 800; }}
+QPushButton[upgrade="true"] {{ background: {rgba(t.accent, 0.10)}; color: {t.text}; border: 1px solid {t.accent};
+  font-weight: 700; }}
+QPushButton[upgrade="true"]:hover {{ background: {rgba(t.accent, 0.22)}; }}
+#StepNumber {{ color: {t.accent}; font-size: {points * 1.8:.1f}pt; font-weight: 800; }}
+#StepCard {{ background: {t.panel_alt}; border: 1px solid {t.border}; border-radius: 12px; }}
+#PromoCard {{ border: 1px solid {rgba(t.accent, 0.6)}; border-radius: 12px;
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {rgba(t.accent, 0.16)}, stop:0.6 {t.panel},
+  stop:1 {t.panel}); }}
+#PromoTitle {{ font-size: {points * 1.25:.1f}pt; font-weight: 800; }}
+#FormatChip {{ background: {t.panel_alt}; border: 1px solid {t.border}; border-radius: 8px; padding: 2px 10px;
+  color: {t.text}; font-size: {points * 0.9:.1f}pt; }}
+#ActionTile {{ background: {t.panel_alt}; border: 1px solid {t.border}; border-radius: 12px; }}
+#ActionTile[recommended="true"] {{ border: 1px solid {t.accent}; }}
+#TileTitle {{ font-size: {points * 1.15:.1f}pt; font-weight: 700; }}
+#PlanCard {{ background: {t.panel}; border: 1px solid {t.border}; border-radius: 14px; }}
+#PlanCard[popular="true"] {{ border: 2px solid {t.accent};
+  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {rgba(t.accent, 0.10)}, stop:0.35 {t.panel},
+  stop:1 {t.panel}); }}
+#PlanName {{ font-size: {points * 1.3:.1f}pt; font-weight: 800; }}
+#PlanPrice {{ font-size: {points * 2.6:.1f}pt; font-weight: 800; }}
+#Segmented {{ background: {t.panel_alt}; border: 1px solid {t.border}; border-radius: 18px; }}
+#Segmented QToolButton {{ border: none; border-radius: 15px; padding: 6px 18px; color: {t.muted};
+  background: transparent; font-weight: 600; }}
+#Segmented QToolButton:hover {{ color: {t.text}; }}
+#Segmented QToolButton:checked {{ background: {t.accent}; color: {t.accent_text}; font-weight: 700; }}
+#Notice {{ background: {rgba(t.info, 0.12)}; border: 1px solid {rgba(t.info, 0.5)}; border-radius: 10px; }}
+#AboutHero {{ border-radius: 14px; border: 1px solid {t.border};
+  background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {rgba(t.accent, 0.20)}, stop:0.55 {t.panel},
+  stop:1 {t.panel}); }}
+#LinkButton {{ background: transparent; border: none; color: {t.info}; padding: 2px 0; text-align: left; }}
+QScrollArea#Clear {{ background: transparent; border: none; }}
+QScrollArea#Clear > QWidget, #ClearInner {{ background: transparent; }}
+#Keycap {{ background: {t.panel_alt}; color: {t.text}; border: 1px solid {t.border};
+  border-bottom: 2px solid {t.border}; border-radius: 6px; padding: 2px 9px; font-weight: 700; }}
+#LinkButton:hover {{ text-decoration: underline; }}
 """
 
 
@@ -189,7 +252,8 @@ def _indicator_files(t: Theme) -> dict[str, str]:
     """Write check box / radio indicator images for the theme; return their paths."""
     from ..logsetup import app_data_dir
 
-    folder = app_data_dir() / "theme" / t.name
+    # One folder per theme and accent: Qt caches images by file name, so a new accent needs new files.
+    folder = app_data_dir() / "theme" / f"{t.name}-{t.accent.lstrip('#').lower()}"
     folder.mkdir(parents=True, exist_ok=True)
     box = '<rect x="1" y="1" width="16" height="16" rx="4" fill="{fill}" stroke="{stroke}" stroke-width="1.6"/>'
     svgs = {
@@ -206,6 +270,12 @@ def _indicator_files(t: Theme) -> dict[str, str]:
         "radio": f'<circle cx="9" cy="9" r="7.4" fill="{t.panel_alt}" stroke="{t.muted}" stroke-width="1.6"/>',
         "radio_on": f'<circle cx="9" cy="9" r="7.4" fill="{t.panel_alt}" stroke="{t.accent}" stroke-width="1.6"/>'
                     f'<circle cx="9" cy="9" r="4" fill="{t.accent}"/>',
+        "down": f'<path d="M4.5 7l4.5 4.5L13.5 7" fill="none" stroke="{t.muted}" stroke-width="1.8" '
+                f'stroke-linecap="round" stroke-linejoin="round"/>',
+        "up": f'<path d="M4.5 11l4.5-4.5L13.5 11" fill="none" stroke="{t.muted}" stroke-width="1.8" '
+              f'stroke-linecap="round" stroke-linejoin="round"/>',
+        "down_off": f'<path d="M4.5 7l4.5 4.5L13.5 7" fill="none" stroke="{t.border}" stroke-width="1.8" '
+                    f'stroke-linecap="round" stroke-linejoin="round"/>',
     }
     paths = {}
     for key, body in svgs.items():
@@ -221,7 +291,7 @@ def _indicator_files(t: Theme) -> dict[str, str]:
 
 
 def _indicator_rules(paths: dict[str, str]) -> str:
-    if len(paths) < 7:
+    if len(paths) < 10:
         return ""
     views = "QTreeView::indicator, QTableView::indicator, QListView::indicator, QCheckBox::indicator"
     return f"""
@@ -237,10 +307,22 @@ QCheckBox::indicator:checked:disabled {{ image: url("{paths['checked_off']}"); }
 QRadioButton::indicator {{ width: 16px; height: 16px; }}
 QRadioButton::indicator:unchecked {{ image: url("{paths['radio']}"); }}
 QRadioButton::indicator:checked {{ image: url("{paths['radio_on']}"); }}
+QComboBox {{ padding-right: 26px; }}
+QComboBox::drop-down {{ subcontrol-origin: padding; subcontrol-position: center right; width: 24px; border: none; }}
+QComboBox::down-arrow {{ image: url("{paths['down']}"); width: 14px; height: 14px; }}
+QComboBox::down-arrow:disabled {{ image: url("{paths['down_off']}"); }}
+QSpinBox, QDoubleSpinBox {{ padding-right: 22px; }}
+QSpinBox::up-button, QDoubleSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right;
+  width: 20px; border: none; background: transparent; }}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{ subcontrol-origin: border; subcontrol-position: bottom right;
+  width: 20px; border: none; background: transparent; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{ image: url("{paths['up']}"); width: 11px; height: 11px; }}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image: url("{paths['down']}"); width: 11px; height: 11px; }}
 """
 
 
-def apply(app: QApplication, name: str = "dark", text_size: str = "normal", density: str = "comfortable") -> Theme:
+def apply(app: QApplication, name: str = "dark", text_size: str = "normal", density: str = "comfortable",
+          accent: str = "lifeboat") -> Theme:
     global _current
     if name == "system":
         hints = app.styleHints()
@@ -251,6 +333,9 @@ def apply(app: QApplication, name: str = "dark", text_size: str = "normal", dens
         except AttributeError:
             name = "dark"
     theme = LIGHT if name == "light" else DARK
+    if accent in ACCENTS and accent != "lifeboat":
+        _name, colour, hover, end = ACCENTS[accent]
+        theme = replace(theme, accent=colour, accent_hover=hover, accent_2=end)
     _current = theme
     app.setStyle("Fusion")
     app.setPalette(_palette(theme))

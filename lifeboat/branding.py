@@ -50,3 +50,11 @@ def owner_logo() -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def notices_file() -> Path | None:
+    """THIRD_PARTY_NOTICES.md: next to the program when packaged, in the source folder otherwise."""
+    frozen_base = getattr(sys, "_MEIPASS", None)
+    base = Path(frozen_base) if frozen_base else Path(__file__).resolve().parent.parent
+    path = base / "THIRD_PARTY_NOTICES.md"
+    return path if path.is_file() else None

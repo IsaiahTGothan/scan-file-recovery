@@ -926,3 +926,224 @@ def test_unlock_an_encrypted_mac_volume(app, disks, monkeypatch):
     found = next(n for n in window.result.root.walk() if n.name == secret["file"])
     assert found.volume is not None
     window.close()
+
+
+def test_plans_dialog_buttons_only_say_coming_soon(app):
+    """Every trial, subscribe and buy button says "coming soon" and nothing else: no field to type
+    payment details in, nothing sent. The period switch changes the prices."""
+    from lifeboat import plans
+    from lifeboat.ui.plans_dialog import PlansDialog
+
+    dialog = PlansDialog(None)
+    pro, tech = dialog.cards["pro"], dialog.cards["technician"]
+    assert dialog.periods["yearly"].isChecked() and pro.price.text() == "$59.99"
+    assert not dialog.findChildren(QtWidgets.QLineEdit)          # nowhere to type a card number
+    dialog.periods["monthly"].click()
+    assert pro.price.text() == "$19.99" and pro.subscribe.text() == "Subscribe"
+    dialog.periods["lifetime"].click()
+    assert tech.price.text() == "$599" and tech.subscribe.text() == "Buy once"
+    assert dialog.cards["free"].price.text() == "$0" and dialog.cards["free"].trial is None
+    assert not dialog.notice.isVisibleTo(dialog)
+    pro.trial.click()
+    assert dialog.notice.isVisibleTo(dialog)
+    assert "Coming soon" in dialog.last_notice and f"{plans.TRIAL_DAYS}-day free trial of Pro" in dialog.last_notice
+    assert "no payment details" in dialog.last_notice
+    tech.subscribe.click()
+    assert "Technician for life" in dialog.last_notice
+    dialog.periods["yearly"].click()
+    tech.subscribe.click()
+    assert "Technician subscriptions" in dialog.last_notice
+    dialog._license()
+    assert dialog.result() == PlansDialog.LICENSE
+
+
+def test_upgrade_and_trial_buttons_open_the_plans(app, monkeypatch):
+    """Upgrade (header), See plans and Start free trial (welcome card), and About > See plans all
+    open the plans; "Have a license key?" goes on to Settings > Account & license."""
+    import lifeboat.ui.main_window as mw
+    from lifeboat.ui.dialogs import AboutDialog
+
+    opened: list[str] = []
+    answers = [0, 0, mw.PlansDialog.LICENSE]
+
+    class FakePlans:
+        LICENSE = mw.PlansDialog.LICENSE
+
+        def __init__(self, parent):
+            self.notice = ""
+
+        def show_notice(self, html):
+            self.notice = html
+
+        def exec(self):
+            opened.append(self.notice)
+            return answers.pop(0) if answers else 0
+
+        def deleteLater(self):
+            pass
+
+    pages: list[str] = []
+
+    class FakeSettings:
+        DialogCode = QtWidgets.QDialog.DialogCode
+
+        def __init__(self, parent, page=""):
+            pages.append(page)
+
+        def exec(self):
+            return QtWidgets.QDialog.DialogCode.Rejected
+
+        def deleteLater(self):
+            pass
+
+    class FakeAbout:
+        PLANS = AboutDialog.PLANS
+
+        def __init__(self, parent):
+            pass
+
+        def exec(self):
+            return AboutDialog.PLANS
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(mw, "PlansDialog", FakePlans)
+    monkeypatch.setattr(mw, "SettingsDialog", FakeSettings)
+    monkeypatch.setattr(mw, "AboutDialog", FakeAbout)
+    window = mw.MainWindow()
+    assert window.plan_badge.text() == "EARLY ACCESS"
+    window.btn_plans.click()
+    window.promo_trial.click()
+    window.promo_plans.click()                       # answered with "Have a license key?"
+    assert opened[0] == "" and "free trial of Pro" in opened[1]
+    assert pages == ["Account & license"]
+    window.btn_help.click()                          # About > See plans
+    assert len(opened) == 4
+    window.close()
+
+
+def test_new_settings_apply(app):
+    """Accent color, file sizes, dates, log detail, what a scan shows first, Deep scan's choices,
+    the settings search and the license box (coming soon)."""
+    import logging
+
+    from lifeboat.ui import theme
+    from lifeboat.ui.dialogs import DEFAULTS, DeepScanDialog, apply_appearance, pref, settings
+    from lifeboat.ui.settings_dialog import CHOICES, SettingsDialog
+    from lifeboat.util import display_time, format_size, set_size_units, set_time_style
+
+    settings().clear()
+    dialog = SettingsDialog(None, "Account & license")
+    assert dialog.nav.currentRow() == SettingsDialog.PAGES.index("Account & license")
+    dialog._activate()
+    assert dialog.notice.startswith("Coming soon")
+    dialog.search.setText("accent")
+    shown = [dialog.nav.item(i).text() for i in range(dialog.nav.count()) if not dialog.nav.item(i).isHidden()]
+    assert shown == ["Appearance"]
+    dialog.search.setText("")
+    assert all(not dialog.nav.item(i).isHidden() for i in range(dialog.nav.count()))
+
+    def choose(key, value):
+        dialog.combos[key].setCurrentIndex([k for k, _label in CHOICES[key]].index(value))
+
+    choose("accent", "ocean")
+    choose("size_units", "decimal")
+    choose("date_format", "mdy")
+    choose("log_detail", "normal")
+    choose("status_filter", "deleted")
+    dialog.groups["Videos"].setChecked(False)
+    dialog.checks["open_report"].setChecked(True)
+    dialog.save()
+    assert pref("accent") == "ocean" and pref("open_report") is True
+    assert "Videos" not in str(pref("deep_groups")).split(",")
+    try:
+        apply_appearance(app)
+        assert theme.current().accent == theme.ACCENTS["ocean"][1]
+        assert format_size(1500) == "1.50 KB"                       # 1 KB = 1,000 bytes
+        assert "/" in display_time(1_700_000_000) and display_time(1_700_000_000).endswith(("AM", "PM"))
+        files = [h for h in logging.getLogger().handlers if isinstance(h, logging.FileHandler)]
+        assert all(h.level == logging.INFO for h in files if getattr(h, "_lifeboat", False))
+        deep = DeepScanDialog(None, DeviceInfo(path="x", kind="image", size=1 << 30, model="Disk image"))
+        assert not deep.groups["Videos"].isChecked() and deep.groups["Photos"].isChecked()
+        deep.partitions.setChecked(False)
+        deep._accept()                                              # remembered for next time
+        assert pref("deep_partitions") is False
+        again = SettingsDialog(None)
+        assert again.values()["deep_partitions"] is False and again.values()["accent"] == "ocean"
+        again.restore_defaults()
+        assert again.values() == dict(DEFAULTS)
+    finally:
+        settings().clear()
+        apply_appearance(app)
+        set_size_units(False)
+        set_time_style("ymd")
+    assert format_size(1536) == "1.50 KB" and display_time(0).count("-") == 2
+
+
+def test_status_filter_setting_applies_to_a_new_scan(app, images):
+    import lifeboat.ui.main_window as mw
+    from lifeboat.ui.dialogs import settings
+
+    settings().setValue("status_filter", "existing")
+    try:
+        window = mw.MainWindow()
+        path = str(image_path("fat16"))
+        info = DeviceInfo(path=path, kind="image", size=os.path.getsize(path), model="Disk image")
+        window.images.append(info)
+        window.sources.set_devices(window.devices + window.images, info.identity)
+        window.select_source(info)
+        window.quick_scan()
+        _wait(app, window)
+        assert window.status_filter.currentIndex() == 1
+        assert window.selection.filter.status == "existing"
+        window.close()
+    finally:
+        settings().remove("status_filter")
+
+
+def test_toggle_switch(app):
+    from lifeboat.ui.widgets import Toggle
+
+    toggle = Toggle("Keep awake")
+    toggle.show()
+    assert not toggle.isChecked()
+    toggle.click()
+    assert toggle.isChecked()
+    toggle.setFocus()
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    QTest.keyClick(toggle, Qt.Key.Key_Space)
+    assert not toggle.isChecked()
+    toggle.setEnabled(False)
+    toggle.click()
+    assert not toggle.isChecked()
+    _pump(app, 0.3)
+    toggle.grab()                                   # paints without errors
+    toggle.close()
+
+
+def test_theme_change_redraws_the_icons(app):
+    """Switching theme or accent while the window is open redraws its icons in the new colours
+    (they used to keep the old ones until Lifeboat was restarted)."""
+    import lifeboat.ui.main_window as mw
+    from lifeboat.ui import icons
+    from lifeboat.ui.dialogs import apply_appearance, settings
+
+    window = mw.MainWindow()
+    before = window.btn_scan.icon().pixmap(16, 16).toImage()
+    try:
+        settings().setValue("theme", "light")
+        settings().setValue("accent", "emerald")
+        window.apply_settings()
+        after = window.btn_scan.icon().pixmap(16, 16).toImage()
+        assert before != after
+        assert window.btn_plans.property("lb_icon") == "star"
+        glyphs = [w for w in window.findChildren(QtWidgets.QLabel) if w.property("lb_glyph")]
+        assert glyphs
+    finally:
+        settings().clear()
+        apply_appearance(app)
+        icons.clear_cache()
+    window.close()

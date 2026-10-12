@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
@@ -41,6 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import plans
 from ..branding import APP_FULL_NAME, APP_NAME, CREDIT, TAGLINE, owner_logo
 from ..device.base import NO_MEDIA, NOT_ANSWERING, BlockDevice, DeviceInfo
 from ..device.check import system_tool
@@ -88,14 +90,17 @@ from .models import (
     ViewFilter,
     category,
 )
+from .plans_dialog import PlansDialog
 from .settings_dialog import SettingsDialog
 from .theme import current
 from .widgets import (
     Banner,
     CategoryChips,
     DiskMap,
+    FittedBrowser,
     JobPanel,
     MapLegend,
+    PaddedDelegate,
     PreviewPane,
     SourceList,
     StatCard,
@@ -103,6 +108,7 @@ from .widgets import (
     beep,
     device_icon_name,
     device_subtitle,
+    pill,
     toast_level,
 )
 
@@ -116,7 +122,7 @@ _RANK = {Status.OK: 3, Status.PARTIAL: 2, Status.FAILED: 1}  # a later run never
 def _tool(text: str, icon_name: str, tip: str) -> QToolButton:
     button = QToolButton()
     button.setText(text)
-    button.setIcon(icons.icon(icon_name))
+    icons.put(button, icon_name)
     button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
     button.setToolTip(tip)
     return button
@@ -125,6 +131,7 @@ def _tool(text: str, icon_name: str, tip: str) -> QToolButton:
 class MainWindow(QMainWindow):
     TOAST_GAP_ERROR = 2.0    # seconds between pop-ups; problems in between are summarised
     TOAST_GAP_WARNING = 4.0
+    TAB_ICONS = ("list", "warning", "report", "grid")   # Activity, Problems, Results, Disk map
 
     def __init__(self) -> None:
         super().__init__()
@@ -238,7 +245,12 @@ class MainWindow(QMainWindow):
         titles.addWidget(title)
         titles.addWidget(subtitle)
         layout.addLayout(titles)
-        layout.addSpacing(18)
+        layout.addSpacing(10)
+        status = plans.current()
+        self.plan_badge = pill(status.badge)
+        self.plan_badge.setToolTip(f"{status.name}: {status.detail}")
+        layout.addWidget(self.plan_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addSpacing(14)
         self.btn_scan = _tool("Scan", "search", "Read the partitions and file tables of the selected source (Ctrl+R)")
         self.btn_deep = _tool("Deep scan", "radar", "Read the whole drive to find lost partitions and files")
         self.btn_image = _tool("Create image", "clone", "Copy the whole drive to an image file first (safest)")
@@ -246,7 +258,16 @@ class MainWindow(QMainWindow):
         for b in (self.btn_scan, self.btn_deep, self.btn_image, self.btn_open):
             layout.addWidget(b)
         layout.addStretch(1)
-        self.btn_recover = QPushButton(icons.icon("recover", "#ffffff"), "Recover")
+        self.btn_plans = QPushButton("Upgrade")
+        self.btn_plans.setProperty("upgrade", True)
+        icons.put(self.btn_plans, "star", "accent")
+        self.btn_plans.setMinimumHeight(36)
+        self.btn_plans.setToolTip("Plans, the free trial and subscriptions (coming soon). Every feature is unlocked "
+                                  "during early access.")
+        layout.addWidget(self.btn_plans)
+        layout.addSpacing(6)
+        self.btn_recover = QPushButton("Recover")
+        icons.put(self.btn_recover, "recover", "white")
         self.btn_recover.setProperty("primary", True)
         self.btn_recover.setMinimumHeight(36)
         self.btn_recover.setToolTip("Copy the ticked files to another drive (Ctrl+S)")
@@ -283,7 +304,7 @@ class MainWindow(QMainWindow):
                                                        f"what to try (also: is a drive in {system_tool()}?)")
         head.addWidget(self.btn_check)
         self.btn_refresh = QToolButton()
-        self.btn_refresh.setIcon(icons.icon("refresh"))
+        icons.put(self.btn_refresh, "refresh")
         self.btn_refresh.setToolTip("Look for drives again (F5)")
         head.addWidget(self.btn_refresh)
         layout.addLayout(head)
@@ -299,14 +320,24 @@ class MainWindow(QMainWindow):
     def _welcome_page(self) -> QWidget:
         page = QFrame()
         page.setObjectName("Panel")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(36, 30, 36, 30)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(1, 1, 1, 1)
+        scroll = QScrollArea()
+        scroll.setObjectName("Clear")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        inner = QWidget()
+        inner.setObjectName("ClearInner")
+        layout = QVBoxLayout(inner)
+        layout.setContentsMargins(30, 22, 30, 22)
         layout.setSpacing(14)
         top = QHBoxLayout()
+        top.setSpacing(16)
         logo = QLabel()
         logo.setPixmap(icons.app_pixmap(72))
         top.addWidget(logo)
         texts = QVBoxLayout()
+        texts.setSpacing(4)
         big = QLabel(APP_FULL_NAME)
         big.setObjectName("BigTitle")
         sub = QLabel(TAGLINE + "  Read-only, bad-sector aware, and it tells you about every problem.")
@@ -324,14 +355,14 @@ class MainWindow(QMainWindow):
             ("3", "Tick your files", "Browse folders, search, filter by type, preview before recovering."),
             ("4", "Recover", "Save to a different, healthy drive. Every copy is verified and reported."),
         ]
-        t = current()
         for i, (num, head, text) in enumerate(items):
             card = QFrame()
-            card.setObjectName("Card")
+            card.setObjectName("StepCard")
             c_layout = QVBoxLayout(card)
-            c_layout.setContentsMargins(14, 12, 14, 12)
+            c_layout.setContentsMargins(16, 14, 16, 14)
+            c_layout.setSpacing(4)
             n = QLabel(num)
-            n.setStyleSheet(f"color:{t.accent}; font-size:18pt; font-weight:800;")
+            n.setObjectName("StepNumber")
             h = QLabel(head)
             h.setObjectName("SectionTitle")
             body = QLabel(text)
@@ -342,7 +373,18 @@ class MainWindow(QMainWindow):
             c_layout.addWidget(body)
             c_layout.addStretch(1)
             steps.addWidget(card, 0, i)
+            steps.setColumnStretch(i, 1)
         layout.addLayout(steps)
+        formats = QHBoxLayout()
+        formats.setSpacing(6)
+        reads = QLabel("Reads")
+        reads.setProperty("muted", True)
+        formats.addWidget(reads)
+        for name in ("NTFS", "exFAT", "FAT32", "Mac HFS+", "Mac APFS", "Encrypted APFS", "MBR and GPT",
+                     "Disk images"):
+            formats.addWidget(pill(name, "FormatChip"))
+        formats.addStretch(1)
+        layout.addLayout(formats)
         if sys.platform == "darwin":
             offers = ("<li>If macOS says the disk isn't readable and offers to <b>Initialize</b> it, click "
                       "<b>Ignore</b>. Don't run <b>First Aid</b> on it either: both write to the drive and can "
@@ -352,6 +394,12 @@ class MainWindow(QMainWindow):
             offers = ("<li>If Windows offers to <b>format</b> or <b>scan and fix</b> the drive, click <b>Cancel</b>: "
                       "both can destroy what is left.</li>")
             explorer = "Keep File Explorer away from the failing drive while Lifeboat works."
+        tips = QHBoxLayout()
+        tips.setSpacing(12)
+        safety_card = QFrame()
+        safety_card.setObjectName("StepCard")
+        safety_column = QVBoxLayout(safety_card)
+        safety_column.setContentsMargins(16, 12, 16, 12)
         safety = QLabel(
             "<b>Before you start</b><ul style='margin-left:-20px'>"
             "<li>Lifeboat never writes to the drive it reads from.</li>"
@@ -361,29 +409,75 @@ class MainWindow(QMainWindow):
             f"<li>{explorer}</li></ul>")
         safety.setWordWrap(True)
         safety.setTextFormat(Qt.TextFormat.RichText)
-        layout.addWidget(safety)
-        missing = QHBoxLayout()
-        missing_text = QLabel("<b>Drive not in the list?</b> It may be detected by the computer but not answering. "
-                              "A Drive check shows every drive the computer detects and what to try.")
+        safety_column.addWidget(safety)
+        tips.addWidget(safety_card, 3)
+        missing_card = QFrame()
+        missing_card.setObjectName("StepCard")
+        missing = QVBoxLayout(missing_card)
+        missing.setContentsMargins(16, 14, 16, 14)
+        missing.setSpacing(8)
+        missing_text = QLabel("<b>Drive not in the list?</b><br>It may be detected by the computer but not "
+                              "answering. A Drive check shows every drive the computer detects and what to try.")
         missing_text.setWordWrap(True)
         missing_text.setTextFormat(Qt.TextFormat.RichText)
-        self.welcome_check = QPushButton(icons.icon("pulse"), "Run a Drive check")
-        missing.addWidget(missing_text, 1)
-        missing.addWidget(self.welcome_check)
-        layout.addLayout(missing)
+        self.welcome_check = QPushButton("Run a Drive check")
+        icons.put(self.welcome_check, "pulse")
         self.welcome_admin = QLabel()
         self.welcome_admin.setWordWrap(True)
-        self.welcome_admin.setStyleSheet(f"color:{t.warn}")
-        layout.addWidget(self.welcome_admin)
+        self.welcome_admin.setStyleSheet(f"color:{current().warn}")
+        missing.addWidget(missing_text)
+        missing.addWidget(self.welcome_admin)
+        missing.addStretch(1)
+        missing.addWidget(self.welcome_check, 0, Qt.AlignmentFlag.AlignLeft)
+        tips.addWidget(missing_card, 2)
+        layout.addLayout(tips)
         layout.addStretch(1)
+        layout.addWidget(self._promo_card())
+        scroll.setWidget(inner)
+        outer.addWidget(scroll)
         return page
+
+    def _promo_card(self) -> QWidget:
+        """Early access, and the plans and free trial to come."""
+        card = QFrame()
+        card.setObjectName("PromoCard")
+        row = QHBoxLayout(card)
+        row.setContentsMargins(18, 14, 16, 14)
+        row.setSpacing(14)
+        row.addWidget(self._glyph("sparkle", 34, "accent"), 0, Qt.AlignmentFlag.AlignTop)
+        texts = QVBoxLayout()
+        texts.setSpacing(3)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        title = QLabel(f"Lifeboat Pro: {plans.TRIAL_DAYS}-day free trial")
+        title.setObjectName("PromoTitle")
+        head.addWidget(title)
+        head.addWidget(pill("COMING SOON", "SoonPill"))
+        head.addStretch(1)
+        texts.addLayout(head)
+        body = QLabel(f"{plans.current().detail} After launch, Free keeps scanning, previews and small recoveries; "
+                      "Pro recovers everything, Mac drives included.")
+        body.setWordWrap(True)
+        body.setProperty("muted", True)
+        texts.addWidget(body)
+        row.addLayout(texts, 1)
+        self.promo_plans = QPushButton("See plans")
+        self.promo_plans.setProperty("upgrade", True)
+        icons.put(self.promo_plans, "star", "accent")
+        self.promo_trial = QPushButton("Start free trial")
+        self.promo_trial.setProperty("primary", True)
+        icons.put(self.promo_trial, "gift", "white")
+        for button in (self.promo_plans, self.promo_trial):
+            button.setMinimumHeight(36)
+            row.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
+        return card
 
     def _overview_page(self) -> QWidget:
         page = QFrame()
         page.setObjectName("Panel")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(28, 24, 28, 24)
-        layout.setSpacing(14)
+        layout.setSpacing(16)
         head = QHBoxLayout()
         self.ov_icon = QLabel()
         head.addWidget(self.ov_icon)
@@ -404,24 +498,63 @@ class MainWindow(QMainWindow):
         for c in (self.card_capacity, self.card_sectors, self.card_bus, self.card_health):
             cards.addWidget(c)
         layout.addLayout(cards)
-        self.ov_notes = QTextBrowser()
-        self.ov_notes.setOpenExternalLinks(False)
-        self.ov_notes.setMinimumHeight(140)
-        layout.addWidget(self.ov_notes, 1)
-        actions = QHBoxLayout()
-        self.ov_scan = QPushButton(icons.icon("search", "#ffffff"), "Scan this drive")
+        self.ov_notes = FittedBrowser()
+        layout.addWidget(self.ov_notes)
+        self.ov_tiles = QWidget()
+        tiles = QHBoxLayout(self.ov_tiles)
+        tiles.setContentsMargins(0, 0, 0, 0)
+        tiles.setSpacing(12)
+        self.ov_scan = QPushButton("Scan this drive")
         self.ov_scan.setProperty("primary", True)
-        self.ov_deep = QPushButton(icons.icon("radar"), "Deep scan")
-        self.ov_image = QPushButton(icons.icon("clone"), "Create disk image")
-        self.ov_admin = QPushButton(icons.icon("lock"), "Restart as administrator")
+        icons.put(self.ov_scan, "search", "white")
+        self.ov_deep = QPushButton("Deep scan")
+        icons.put(self.ov_deep, "radar")
+        self.ov_image = QPushButton("Create disk image")
+        icons.put(self.ov_image, "clone")
+        self.ov_deep_text = QLabel()
+        for icon_name, title, text, button, recommended in (
+                ("search", "Scan", "Reads the partition tables and file tables: every file with its name and "
+                 "folder, deleted ones too. Usually takes minutes.", self.ov_scan, True),
+                ("radar", "Deep scan", "", self.ov_deep, False),
+                ("clone", "Create a disk image", "Copies the whole drive to a file first, healthy areas first. The "
+                 "safest choice for a drive that clicks, hangs or disconnects.", self.ov_image, False)):
+            tile = QFrame()
+            tile.setObjectName("ActionTile")
+            tile.setProperty("recommended", recommended)
+            column = QVBoxLayout(tile)
+            column.setContentsMargins(16, 14, 16, 14)
+            column.setSpacing(6)
+            top = QHBoxLayout()
+            glyph = self._glyph(icon_name, 26, "accent" if recommended else "info")
+            name = QLabel(title)
+            name.setObjectName("TileTitle")
+            top.addWidget(glyph)
+            top.addWidget(name, 1)
+            if recommended:
+                top.addWidget(pill("RECOMMENDED"))
+            column.addLayout(top)
+            body = self.ov_deep_text if button is self.ov_deep else QLabel(text)
+            body.setWordWrap(True)
+            body.setProperty("muted", True)
+            column.addWidget(body)
+            column.addStretch(1)
+            button.setMinimumHeight(38)
+            column.addWidget(button)
+            tiles.addWidget(tile, 1)
+        layout.addWidget(self.ov_tiles)
+        actions = QHBoxLayout()
+        self.ov_admin = QPushButton("Restart as administrator")
+        icons.put(self.ov_admin, "lock")
         self.ov_admin.setVisible(False)
-        self.ov_check = QPushButton(icons.icon("pulse"), "Run a Drive check")
+        self.ov_check = QPushButton("Run a Drive check")
+        icons.put(self.ov_check, "pulse")
         self.ov_check.setVisible(False)
-        for b in (self.ov_scan, self.ov_deep, self.ov_image, self.ov_admin, self.ov_check):
+        for b in (self.ov_admin, self.ov_check):
             b.setMinimumHeight(38)
             actions.addWidget(b)
         actions.addStretch(1)
         layout.addLayout(actions)
+        layout.addStretch(1)
         return page
 
     def _browser_page(self) -> QWidget:
@@ -433,7 +566,8 @@ class MainWindow(QMainWindow):
         bar.setSpacing(8)
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search names (e.g. *.jpg, invoice) and press Enter")
-        self.search.addAction(icons.icon("search", current().muted), QLineEdit.ActionPosition.LeadingPosition)
+        icons.put(self.search.addAction(icons.icon("search", current().muted),
+                                        QLineEdit.ActionPosition.LeadingPosition), "search", "muted")
         self.search.setClearButtonEnabled(True)
         self.category = CategoryChips(["All files", *CATEGORIES.keys(), "Other"])
         self.status_filter = QComboBox()
@@ -441,7 +575,7 @@ class MainWindow(QMainWindow):
         self.btn_select_all = QToolButton()
         self.btn_select_all.setObjectName("TickButton")
         self.btn_select_all.setText("Tick all shown")
-        self.btn_select_all.setIcon(icons.icon("check"))
+        icons.put(self.btn_select_all, "check")
         self.btn_select_all.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.btn_select_all.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self.btn_select_all.setToolTip("Tick every file the filter shows. The arrow has more ways to tick: halves, "
@@ -463,8 +597,12 @@ class MainWindow(QMainWindow):
         self.tree.setModel(self.folder_model)
         self.tree.setHeaderHidden(True)
         self.tree.setUniformRowHeights(True)
+        # Long volume names scroll sideways instead of being cut short.
+        self.tree.header().setStretchLastSection(False)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.tree.setItemDelegate(PaddedDelegate(self.tree))
         self.tree.setAnimated(True)
-        self.tree.setMinimumWidth(180)
+        self.tree.setMinimumWidth(200)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         split.addWidget(self.tree)
         middle = QWidget()
@@ -488,7 +626,7 @@ class MainWindow(QMainWindow):
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         header.setMinimumSectionSize(60)
-        for col, width in ((1, 76), (2, 116), (3, 116), (4, 104), (5, 60), (6, 90), (7, 260)):
+        for col, width in ((1, 84), (2, 150), (3, 150), (4, 120), (5, 84), (6, 96), (7, 260)):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
             header.resizeSection(col, width)
         self.list.setColumnHidden(3, True)
@@ -503,7 +641,7 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(0, 2)
         split.setStretchFactor(1, 6)
         split.setStretchFactor(2, 2)
-        split.setSizes([225, 800, 235])
+        split.setSizes([290, 760, 280])
         layout.addWidget(split, 1)
         return page
 
@@ -529,8 +667,10 @@ class MainWindow(QMainWindow):
         r_bar = QHBoxLayout()
         self.results_mode = QComboBox()
         self.results_mode.addItems(["Problems only", "Recovered only", "All files"])
-        self.btn_open_dest = QPushButton(icons.icon("open"), "Open folder")
-        self.btn_open_report = QPushButton(icons.icon("report"), "Open report")
+        self.btn_open_dest = QPushButton("Open folder")
+        icons.put(self.btn_open_dest, "open")
+        self.btn_open_report = QPushButton("Open report")
+        icons.put(self.btn_open_report, "report")
         self.results_label = QLabel("No recovery yet.")
         self.results_label.setProperty("muted", True)
         r_bar.addWidget(self.results_mode)
@@ -584,7 +724,9 @@ class MainWindow(QMainWindow):
             if icon_name is None:
                 menu.addSeparator()
                 continue
-            action = menu.addAction(icons.icon(icon_name), text) if icon_name else menu.addAction(text)
+            action = menu.addAction(text)
+            if icon_name:
+                icons.put(action, icon_name)
             if tip:
                 action.setToolTip(tip)
                 action.setStatusTip(tip)
@@ -605,7 +747,8 @@ class MainWindow(QMainWindow):
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(1, 30)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(3, 84)                        # codes are short: LB-123
         view.verticalHeader().setDefaultSectionSize(24)
         return view
 
@@ -626,10 +769,13 @@ class MainWindow(QMainWindow):
         self.problem_badge = QPushButton("No problems")
         self.problem_badge.setFlat(True)
         self.problem_badge.setIcon(icons.icon("success", current().ok))
-        self.btn_pause = QPushButton(icons.icon("pause"), "Pause")
-        self.btn_finish = QPushButton(icons.icon("skip"), "Finish now")
+        self.btn_pause = QPushButton("Pause")
+        icons.put(self.btn_pause, "pause")
+        self.btn_finish = QPushButton("Finish now")
+        icons.put(self.btn_finish, "skip")
         self.btn_finish.setToolTip("Skip the remaining retry passes and finish with what has been recovered")
-        self.btn_stop = QPushButton(icons.icon("stop", current().bad), "Stop")
+        self.btn_stop = QPushButton("Stop")
+        icons.put(self.btn_stop, "stop", "bad")
         self.btn_stop.setProperty("danger", True)
         layout.addWidget(self.status_text, 1)
         layout.addWidget(self.progress)
@@ -662,7 +808,10 @@ class MainWindow(QMainWindow):
         for button in (self.btn_check, self.welcome_check, self.ov_check):
             button.clicked.connect(self.open_drive_check)
         self.btn_recover.clicked.connect(self.recover)
-        self.btn_settings.clicked.connect(self.open_settings)
+        self.btn_plans.clicked.connect(self._plans_clicked)
+        self.promo_plans.clicked.connect(self._plans_clicked)
+        self.promo_trial.clicked.connect(self._start_trial)
+        self.btn_settings.clicked.connect(self._open_settings_clicked)
         self.btn_help.clicked.connect(self._show_about)
         self.btn_pause.clicked.connect(self.toggle_pause)
         self.btn_stop.clicked.connect(self.stop_job)
@@ -687,7 +836,8 @@ class MainWindow(QMainWindow):
         self.btn_open_report.clicked.connect(self._open_report)
         self.results.doubleClicked.connect(self._result_activated)
         for key, slot in (("Ctrl+R", self.quick_scan), ("Ctrl+S", self.recover), ("Ctrl+O", self.open_image),
-                          ("F5", self._refresh_now)):
+                          ("F5", self._refresh_now), ("Ctrl+,", self._open_settings_clicked),
+                          ("Ctrl+F", self._focus_search)):
             action = QAction(self)
             action.setShortcut(QKeySequence(key))
             action.triggered.connect(slot)
@@ -708,8 +858,10 @@ class MainWindow(QMainWindow):
 
     def _show_about(self) -> None:
         dialog = AboutDialog(self)
-        dialog.exec()
+        code = dialog.exec()
         dialog.deleteLater()
+        if code == AboutDialog.PLANS:
+            self.open_plans()
 
     def _show_problems_tab(self) -> None:
         self.tabs.setCurrentIndex(1)
@@ -906,12 +1058,17 @@ class MainWindow(QMainWindow):
         self.ov_admin.setVisible(self.open_error is not None and self.open_error.code == "LB-101"
                                  and can_elevate())
         self.ov_check.setVisible(bool(info.status) or (self.open_error is not None and info.kind == "disk"))
-        for button in (self.ov_scan, self.ov_deep, self.ov_image):
-            button.setVisible(not info.status)  # nothing to scan or image until the drive answers
+        self.ov_tiles.setVisible(not info.status)  # nothing to scan or image until the drive answers
+        seconds = size / (100 * 1000 * 1000) if size else 0    # about 100 MB/s on a healthy drive
+        estimate = ("Under a minute on a healthy drive." if 0 < seconds < 60 else
+                    f"About {format_duration(seconds)} on a healthy drive." if seconds else
+                    "Takes hours on a big drive.")
+        self.ov_deep_text.setText("Reads every sector, front to back: finds lost partitions, and files by their "
+                                  f"signature when the file tables are gone. {estimate}")
         primary = bool(info.status)
         if self.ov_check.property("primary") != primary:
             self.ov_check.setProperty("primary", primary)
-            self.ov_check.setIcon(icons.icon("pulse", "#ffffff" if primary else None))
+            icons.put(self.ov_check, "pulse", "white" if primary else "")
             self.ov_check.style().unpolish(self.ov_check)
             self.ov_check.style().polish(self.ov_check)
 
@@ -1023,13 +1180,13 @@ class MainWindow(QMainWindow):
         if self.job.control.paused:
             self.job.control.resume()
             self.btn_pause.setText("Pause")
-            self.btn_pause.setIcon(icons.icon("pause"))
+            icons.put(self.btn_pause, "pause")
             self.status_text.setText(self.status_text.text().replace(" (paused)", ""))
             self.job_panel.phase.setText(self.job_panel.phase.text().replace(" (paused)", ""))
         else:
             self.job.control.pause()
             self.btn_pause.setText("Resume")
-            self.btn_pause.setIcon(icons.icon("play"))
+            icons.put(self.btn_pause, "play")
             self.status_text.setText(self.status_text.text() + " (paused)")
             self.job_panel.phase.setText(self.job_panel.phase.text() + " (paused)")
 
@@ -1100,6 +1257,11 @@ class MainWindow(QMainWindow):
         if result is not self.result:
             self._positions = {}
             self.list_model.results.clear()
+            shown = str(pref("status_filter"))     # Settings > Scanning > Show after a scan
+            self.status_filter.blockSignals(True)
+            self.status_filter.setCurrentIndex(["all", "existing", "deleted"].index(shown)
+                                               if shown in ("all", "existing", "deleted") else 0)
+            self.status_filter.blockSignals(False)
         self.result = result
         self.selection.set_root(result.root, keep_ticks)
         self.folder_model.set_root(result.root)
@@ -1401,6 +1563,8 @@ class MainWindow(QMainWindow):
             from .models import open_in_explorer
 
             open_in_explorer(summary.job_dir)
+        if bool(pref("open_report")) and summary.report_html and os.path.isfile(summary.report_html):
+            self._open_report()
         # What's left: of this recovery, or of the whole set being split across drives.
         rest = ticking.not_recovered(self._remaining or [t.node for t in summary.tasks], self.list_model.results)
         if not rest:
@@ -1833,8 +1997,11 @@ class MainWindow(QMainWindow):
         self.btn_open_dest.setEnabled(has_results)
         self.btn_open_report.setEnabled(has_results and bool(self.last_summary and self.last_summary.report_html))
 
-    def open_settings(self) -> None:
-        dialog = SettingsDialog(self)
+    def _open_settings_clicked(self) -> None:
+        self.open_settings()
+
+    def open_settings(self, page: str = "") -> None:
+        dialog = SettingsDialog(self, page)
         accepted = dialog.exec() == dialog.DialogCode.Accepted
         dialog.deleteLater()
         if accepted:
@@ -1842,10 +2009,53 @@ class MainWindow(QMainWindow):
             self.toasts.show("success", "Settings saved", "They apply right away; the recovery defaults apply "
                                                           "the next time you press Recover.")
 
+    def _plans_clicked(self) -> None:
+        self.open_plans()
+
+    def open_plans(self, notice: str = "") -> None:
+        """The plans, prices and free trial (coming soon: nothing is sold yet)."""
+        dialog = PlansDialog(self)
+        if notice:
+            dialog.show_notice(notice)
+        code = dialog.exec()
+        dialog.deleteLater()
+        if code == PlansDialog.LICENSE:
+            self.open_settings("Account & license")
+
+    def _start_trial(self) -> None:
+        self.open_plans(f"<b>Coming soon: the {plans.TRIAL_DAYS}-day free trial of Pro.</b> {plans.COMING_SOON}")
+
+    def _focus_search(self) -> None:
+        if self.result is not None:
+            self.pages.setCurrentIndex(2)
+            self.search.setFocus()
+            self.search.selectAll()
+
+    def _glyph(self, name: str, size: int, role: str = "") -> QLabel:
+        """A label showing an icon, drawn again in the new colours when the theme changes."""
+        label = QLabel()
+        label.setProperty("lb_glyph", f"{name}:{size}:{role}")
+        label.setPixmap(icons.pixmap(name, size, icons._tint(role)))
+        return label
+
+    def _refresh_icons(self) -> None:
+        """After a theme or accent change: every icon in the new colours."""
+        icons.refresh(self)
+        for label in self.findChildren(QLabel):
+            spec = label.property("lb_glyph")
+            if spec:
+                name, size, role = str(spec).split(":")
+                label.setPixmap(icons.pixmap(name, int(size), icons._tint(role)))
+        for index, name in enumerate(self.TAB_ICONS):
+            self.tabs.setTabIcon(index, icons.icon(name))
+        self.welcome_admin.setStyleSheet(f"color:{current().warn}")
+        self.sources.viewport().update()
+
     def apply_settings(self) -> None:
         self._toast_mode = str(pref("toasts"))
         apply_appearance(QApplication.instance())
         icons.clear_cache()
+        self._refresh_icons()
         self._apply_row_heights()
         self.diskmap.set_mode(str(pref("map_animation")))
         self.diskmap.invalidate()
@@ -1858,6 +2068,9 @@ class MainWindow(QMainWindow):
                 self.power.stop()
         if self.result is not None:
             self._apply_filter()
+        self._selection_changed()                 # sizes may be written differently now
+        if self.info is not None and self.pages.currentIndex() == 1:
+            self._show_overview()
 
     def _apply_row_heights(self) -> None:
         """Rows sized for the text size and row spacing chosen in Settings."""

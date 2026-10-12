@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from PySide6.QtCore import QByteArray, QRectF, QSize, Qt
+from PySide6.QtCore import QByteArray, QObject, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
@@ -80,6 +80,24 @@ ICONS: dict[str, str] = {
     "lifebuoy": f'<circle cx="12" cy="12" r="9" {_S}/><circle cx="12" cy="12" r="4" {_S}/>'
                 f'<path d="m4.9 4.9 4.3 4.3M14.8 14.8l4.3 4.3M14.8 9.2l4.3-4.3M9.2 14.8l-4.3 4.3" {_S}/>',
     "pulse": f'<path d="M2.5 12h4l2.5-6.5 4.5 13 2.8-6.5h5.2" {_S}/>',
+    "star": f'<path d="M12 3.2l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17.2l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" {_S}/>',
+    "key": f'<circle cx="7.5" cy="15.5" r="4" {_S}/><path d="M10.4 12.6 20 3M16.5 6.5 19 9M14 9l2 2" {_S}/>',
+    "gift": f'<rect x="3" y="8" width="18" height="4.5" rx="1" {_S}/><path d="M5 12.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 '
+            f'1-1v-7.5M12 8v13M12 8C11 5 9.8 3.5 8 3.5a2.25 2.25 0 0 0 0 4.5M12 8c1-3 2.2-4.5 4-4.5a2.25 2.25 0 0 1 0 '
+            f'4.5" {_S}/>',
+    "palette": f'<path d="M12 3a9 9 0 1 0 0 18c1.2 0 1.8-.8 1.8-1.7 0-.5-.2-.9-.5-1.2-.3-.4-.5-.8-.5-1.3 0-1 .8-1.8 '
+               f'1.8-1.8H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z" {_S}/><circle cx="7.5" cy="11.5" r="1.3" fill="{{c}}"/>'
+               f'<circle cx="10.5" cy="7.2" r="1.3" fill="{{c}}"/><circle cx="15.5" cy="7.8" r="1.3" fill="{{c}}"/>',
+    "keyboard": f'<rect x="2.5" y="6" width="19" height="12" rx="2" {_S}/><path d="M6 10h.01M10 10h.01M14 10h.01'
+                f'M18 10h.01M7.5 14h9" {_S}/>',
+    "globe": f'<circle cx="12" cy="12" r="9" {_S}/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" {_S}/>',
+    "user": f'<circle cx="12" cy="8" r="4" {_S}/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" {_S}/>',
+    "sliders": f'<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" {_S}/><circle cx="15" cy="6" r="2" {_S}/>'
+               f'<circle cx="9" cy="12" r="2" {_S}/><circle cx="17" cy="18" r="2" {_S}/>',
+    "sparkle": f'<path d="M11 3.5l1.9 5.1 5.1 1.9-5.1 1.9L11 17.5l-1.9-5.1L4 10.5l5.1-1.9z" {_S}/>'
+               f'<path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" {_S}/>',
+    "bell": f'<path d="M6 16.5V11a6 6 0 1 1 12 0v5.5l1.5 2h-15z" {_S}/><path d="M10 20.5a2 2 0 0 0 4 0" {_S}/>',
+    "clock": f'<circle cx="12" cy="12" r="9" {_S}/><path d="M12 7v5l3.2 2" {_S}/>',
 }
 
 APP_ICON_SVG = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
@@ -119,6 +137,9 @@ def icon(name: str, color: str | None = None) -> QIcon:
     result = QIcon()
     for size in (16, 20, 24, 32, 48, 64):
         result.addPixmap(_render(_svg(name, tint), size))
+        if tint.lower() == "#ffffff":
+            # On a disabled button: muted (Qt's greyed white would vanish on a light theme)
+            result.addPixmap(_render(_svg(name, current().muted), size), QIcon.Mode.Disabled)
     return result
 
 
@@ -147,6 +168,39 @@ def app_pixmap(size: int) -> QPixmap:
 def clear_cache() -> None:
     icon.cache_clear()
     pixmap.cache_clear()
+
+
+# Icons given with put() remember their name and colour role, so refresh() can draw them again
+# after the theme or the accent colour changed.
+_ROLES = ("", "white", "accent", "muted", "bad", "ok", "warn", "info")
+
+
+def _tint(role: str) -> str | None:
+    from .theme import current
+
+    t = current()
+    return {"white": "#ffffff", "accent": t.accent, "muted": t.muted, "bad": t.bad, "ok": t.ok, "warn": t.warn,
+            "info": t.info}.get(role)
+
+
+def put(target: QObject, name: str, role: str = "") -> None:
+    """Give a button or action an icon tinted for the current theme (``role``: a colour of the
+    theme, "" for the text colour) and remember it for refresh()."""
+    assert role in _ROLES, role
+    target.setProperty("lb_icon", name)
+    target.setProperty("lb_icon_role", role)
+    target.setIcon(icon(name, _tint(role)))  # type: ignore[attr-defined]
+
+
+def refresh(root: QObject) -> None:
+    """Draw again, in the current theme's colours, every icon given with put() under ``root``."""
+    from PySide6.QtGui import QAction
+    from PySide6.QtWidgets import QAbstractButton
+
+    for target in [root, *root.findChildren(QAbstractButton), *root.findChildren(QAction)]:
+        name = target.property("lb_icon")
+        if name:
+            target.setIcon(icon(str(name), _tint(str(target.property("lb_icon_role") or ""))))  # type: ignore[attr-defined]
 
 
 def color(hex_value: str) -> QColor:

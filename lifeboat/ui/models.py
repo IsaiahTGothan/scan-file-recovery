@@ -23,7 +23,7 @@ from ..events import Event, Level
 from ..fs.apfs import LockedVolume
 from ..fs.model import F, Node
 from ..recover.engine import FileTask, Status
-from ..util import format_size, format_timestamp
+from ..util import display_time, format_size
 from . import icons
 from .theme import current
 
@@ -558,9 +558,9 @@ class FileListModel(QAbstractTableModel):
             if col == 1:
                 return "" if is_dir else format_size(node.size)
             if col == 2:
-                return format_timestamp(node.mtime)
+                return display_time(node.mtime)
             if col == 3:
-                return format_timestamp(node.ctime)
+                return display_time(node.ctime)
             if col == 4:
                 return "Folder" if is_dir and not node.flags & F.DELETED else status_text(node)
             if col == 5:

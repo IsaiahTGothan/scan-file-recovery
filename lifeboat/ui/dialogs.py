@@ -43,9 +43,16 @@ APP = os.environ.get("LIFEBOAT_SETTINGS_NAME", "Lifeboat")  # the test-suite use
 # Every preference and its default, in one place (Settings > Restore defaults uses these).
 DEFAULTS: dict[str, object] = {
     "theme": "dark",                # dark / light / system
+    "accent": "lifeboat",           # theme.ACCENTS
     "map_animation": "smooth",      # smooth / light / off
     "text_size": "normal",          # normal / large
     "density": "comfortable",       # comfortable / compact
+    "size_units": "system",         # system / binary (1 KB = 1,024 bytes) / decimal (1,000)
+    "date_format": "ymd",           # util.TIME_STYLES
+    "status_filter": "all",         # files shown after a scan: all / existing / deleted
+    "deep_partitions": True,        # Deep scan: look for lost partitions
+    "deep_carve": True,             # Deep scan: find files by signature
+    "deep_groups": ",".join(GROUPS),  # ... of these kinds
     "sounds": True,
     "tray": True,                   # system notifications while Lifeboat is in the background
     "toasts": "all",                # pop-ups in the window: all / errors / off
@@ -56,12 +63,15 @@ DEFAULTS: dict[str, object] = {
     "preserve_times": True,
     "mark_damaged": False,
     "open_when_done": False,
+    "open_report": False,
     "read_timeout": 15,             # seconds before one read is given up
     "wake_seconds": 30,             # seconds a drive that stops answering gets to come back
     "slow_seconds": 3.0,            # reads slower than this skip ahead (the area is read last)
     "metadata_retry": 180,          # seconds spent re-reading damaged file tables during a scan
     "keep_awake": True,
     "show_system": False,
+    "ask_admin": True,              # offer to restart with administrator rights at start
+    "log_detail": "detailed",       # detailed / normal
 }
 
 
@@ -116,10 +126,20 @@ def pref_float(key: str) -> float:
 
 
 def apply_appearance(app: object) -> None:
-    """Theme, text size and row spacing from the settings."""
+    """Theme, accent colour, text size, row spacing, how sizes and dates are written, and how much
+    is logged, from the settings."""
+    import sys
+
+    from ..logsetup import set_detail
+    from ..util import set_size_units, set_time_style
     from . import theme
 
-    theme.apply(app, str(pref("theme")), str(pref("text_size")), str(pref("density")))  # type: ignore[arg-type]
+    theme.apply(app, str(pref("theme")), str(pref("text_size")), str(pref("density")),  # type: ignore[arg-type]
+                str(pref("accent")))
+    units = str(pref("size_units"))
+    set_size_units(units == "decimal" or (units == "system" and sys.platform == "darwin"))
+    set_time_style(str(pref("date_format")))
+    set_detail(str(pref("log_detail")) != "normal")
 
 
 def _primary(button: QPushButton) -> QPushButton:
@@ -496,21 +516,23 @@ class DeepScanDialog(QDialog):
         text.setProperty("muted", True)
         layout.addWidget(text)
         self.partitions = QCheckBox("Search for lost partitions")
-        self.partitions.setChecked(True)
+        self.partitions.setChecked(bool(pref("deep_partitions")))
         self.carve = QCheckBox("Find files by signature (photos, videos, documents, \u2026)")
-        self.carve.setChecked(True)
+        self.carve.setChecked(bool(pref("deep_carve")))
         layout.addWidget(self.partitions)
         layout.addWidget(self.carve)
         grid = QGridLayout()
         grid.setContentsMargins(26, 0, 0, 0)
         self.groups: dict[str, QCheckBox] = {}
+        wanted = set(str(pref("deep_groups")).split(","))
         for i, group in enumerate(GROUPS):
             box = QCheckBox(group)
-            box.setChecked(True)
+            box.setChecked(group in wanted)
             self.groups[group] = box
             grid.addWidget(box, i // 3, i % 3)
         layout.addLayout(grid)
         self.carve.toggled.connect(self._carve_toggled)
+        self._carve_toggled(self.carve.isChecked())
         tip = QLabel("Tip: for a drive that is failing, create a disk image first and deep-scan the image.")
         tip.setWordWrap(True)
         tip.setProperty("muted", True)
@@ -519,13 +541,21 @@ class DeepScanDialog(QDialog):
         start = _primary(QPushButton(icons.icon("radar", "#ffffff"), "Start deep scan"))
         buttons.addButton(start, QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
     def _carve_toggled(self, on: bool) -> None:
         for box in self.groups.values():
             box.setEnabled(on)
+
+    def _accept(self) -> None:
+        # The next deep scan starts with the same choices (Settings > Scanning has them too).
+        store = settings()
+        store.setValue("deep_partitions", self.partitions.isChecked())
+        store.setValue("deep_carve", self.carve.isChecked())
+        store.setValue("deep_groups", ",".join(g for g, b in self.groups.items() if b.isChecked()))
+        self.accept()
 
     def values(self) -> dict:
         groups = {g for g, b in self.groups.items() if b.isChecked()}
@@ -613,17 +643,29 @@ class UnlockDialog(QDialog):
 
 
 class AboutDialog(QDialog):
+    PLANS = 2           # closed with "See plans"
+
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
+        from .. import plans
+        from .widgets import pill
+
         self.setWindowTitle(f"About {APP_FULL_NAME}")
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(640)
+        status = plans.current()
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        top = QHBoxLayout()
+        layout.setContentsMargins(20, 20, 20, 16)
+        layout.setSpacing(14)
+        hero = QFrame()
+        hero.setObjectName("AboutHero")
+        top = QHBoxLayout(hero)
+        top.setContentsMargins(18, 18, 18, 18)
+        top.setSpacing(16)
         logo = QLabel()
-        logo.setPixmap(icons.app_pixmap(84))
-        top.addWidget(logo)
+        logo.setPixmap(icons.app_pixmap(88))
+        top.addWidget(logo, 0, Qt.AlignmentFlag.AlignTop)
         texts = QVBoxLayout()
+        texts.setSpacing(3)
         name = QLabel(APP_FULL_NAME)
         name.setObjectName("BigTitle")
         version = QLabel(f"Version {build_info()}")
@@ -633,15 +675,37 @@ class AboutDialog(QDialog):
         texts.addWidget(name)
         texts.addWidget(version)
         texts.addWidget(tag)
+        texts.addSpacing(4)
+        texts.addWidget(pill(status.badge))
+        texts.addStretch(1)
         top.addLayout(texts, 1)
-        layout.addLayout(top)
-        owner = owner_logo()
+        layout.addWidget(hero)
+
+        plan_card = QFrame()
+        plan_card.setObjectName("Card")
+        plan_row = QHBoxLayout(plan_card)
+        plan_row.setContentsMargins(14, 10, 10, 10)
+        plan_text = QLabel(f"<b>Plan: {status.name}</b><br>{status.detail}")
+        plan_text.setWordWrap(True)
+        see = QPushButton("See plans")
+        icons.put(see, "star", "accent")
+        see.clicked.connect(self._plans)
+        plan_row.addWidget(plan_text, 1)
+        plan_row.addWidget(see)
+        layout.addWidget(plan_card)
+
+        reads = QLabel("<b>Reads</b> NTFS, exFAT, FAT32/16/12, Mac HFS+ and APFS (encrypted volumes too), MBR, "
+                       "GPT and Apple partition maps, disk images. <b>Finds</b> deleted files, lost partitions "
+                       "and over 40 file types by their signature.")
+        reads.setWordWrap(True)
+        layout.addWidget(reads)
         by = QHBoxLayout()
+        owner = owner_logo()
         if owner is not None:
             pix = QPixmap(str(owner))
             if not pix.isNull():
                 owner_label = QLabel()
-                owner_label.setPixmap(pix.scaledToHeight(48, Qt.TransformationMode.SmoothTransformation))
+                owner_label.setPixmap(pix.scaledToHeight(40, Qt.TransformationMode.SmoothTransformation))
                 by.addWidget(owner_label)
         publisher = QLabel(f'Developed by <a href="{PUBLISHER_URL}">{PUBLISHER}</a>')
         publisher.setOpenExternalLinks(True)
@@ -651,14 +715,69 @@ class AboutDialog(QDialog):
         credits = QLabel(
             "Lifeboat never writes to the drive it recovers from. Reads are bad-sector aware: healthy data first, "
             "damaged areas later, every problem reported.<br><br>"
-            "Built with Python and Qt for Python (PySide6, LGPL v3).")
+            "Built with Python, Qt for Python (PySide6, LGPL v3) and cryptography (Apache 2.0).")
         credits.setWordWrap(True)
         credits.setProperty("muted", True)
         layout.addWidget(credits)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        buttons.rejected.connect(self.reject)
-        buttons.accepted.connect(self.accept)
-        layout.addWidget(buttons)
+        buttons = QHBoxLayout()
+        notices = QPushButton("Licenses")
+        icons.put(notices, "doc")
+        notices.clicked.connect(self._licenses)
+        logs = QPushButton("Log folder")
+        icons.put(logs, "open")
+        logs.clicked.connect(self._open_logs)
+        updates = QPushButton("Check for updates")
+        icons.put(updates, "refresh")
+        updates.setEnabled(False)
+        updates.setToolTip("Coming soon: Lifeboat will check zays.us for new versions.")
+        close = _primary(QPushButton("Close"))
+        close.clicked.connect(self.accept)
+        for button in (notices, logs, updates):
+            buttons.addWidget(button)
+        buttons.addStretch(1)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+
+    def _plans(self) -> None:
+        self.done(self.PLANS)
+
+    def _open_logs(self) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(log_dir()))
+
+    def _licenses(self) -> None:
+        dialog = LicensesDialog(self)
+        dialog.exec()
+        dialog.deleteLater()
+
+
+class LicensesDialog(QDialog):
+    """The third-party notices (THIRD_PARTY_NOTICES.md, bundled with the app)."""
+
+    def __init__(self, parent: QWidget | None) -> None:
+        super().__init__(parent)
+        from PySide6.QtWidgets import QTextBrowser
+
+        from ..branding import notices_file
+
+        self.setWindowTitle("Licenses")
+        self.resize(720, 560)
+        layout = QVBoxLayout(self)
+        text = QTextBrowser()
+        text.setOpenExternalLinks(True)
+        path = notices_file()
+        try:
+            text.setMarkdown(path.read_text(encoding="utf-8") if path is not None else "")
+        except OSError:
+            path = None
+        if path is None:
+            text.setPlainText("The license notices were not found next to the app.")
+        layout.addWidget(text, 1)
+        close = _primary(QPushButton("Close"))
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(close)
+        layout.addLayout(row)
 
 
 class SummaryDialog(QDialog):

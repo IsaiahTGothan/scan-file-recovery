@@ -8,9 +8,23 @@ import time
 from collections import deque
 from collections.abc import Iterable
 
-from PySide6.QtCore import QEvent, QModelIndex, QObject, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (
+    QEvent,
+    QModelIndex,
+    QObject,
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    QVariantAnimation,
+    Signal,
+)
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QApplication,
     QButtonGroup,
     QFrame,
@@ -26,6 +40,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
+    QTextBrowser,
     QToolButton,
     QToolTip,
     QVBoxLayout,
@@ -37,7 +52,7 @@ from ..events import Choice, Event, Level, Progress
 from ..fs.apfs import LockedVolume
 from ..fs.model import F, Node
 from ..rescue.sectormap import PARTIAL, SectorMap, State
-from ..util import format_duration, format_rate, format_size, format_timestamp
+from ..util import display_time, format_duration, format_rate, format_size
 from . import icons
 from .bridge import PendingDecision
 from .models import category, category_icon, chance, status_text
@@ -783,9 +798,9 @@ class PreviewPane(QFrame):
         else:
             rows.append(("Files inside", f"{node.total:,} shown, {node.sel_count:,} ticked"))
         if node.mtime:
-            rows.append(("Modified", format_timestamp(node.mtime)))
+            rows.append(("Modified", display_time(node.mtime)))
         if node.ctime:
-            rows.append(("Created", format_timestamp(node.ctime)))
+            rows.append(("Created", display_time(node.ctime)))
         # Where the file lies on the drive (fragments, problems) is shown after Preview: finding it
         # can mean reading the drive, which never happens on the window's own thread.
         self._rows = rows
@@ -860,6 +875,37 @@ class PreviewPane(QFrame):
             text = "\n".join(lines)
         self.text.setPlainText(note + text)
         self.stack.setCurrentWidget(self.text)
+
+
+class PaddedDelegate(QStyledItemDelegate):
+    """Item sizes that include the style sheet's item padding (Qt leaves it out, so a column sized
+    to its contents cut the longest names short by a few pixels)."""
+
+    def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
+        size = super().sizeHint(option, index)
+        return QSize(size.width() + 14, size.height())
+
+
+class FittedBrowser(QTextBrowser):
+    """A rich-text box as tall as its text (up to ``most`` pixels, then it scrolls); hidden when empty."""
+
+    def __init__(self, most: int = 260) -> None:
+        super().__init__()
+        self.most = most
+        self.setOpenExternalLinks(False)
+        self.document().contentsChanged.connect(self._fit)
+
+    def _fit(self) -> None:
+        document = self.document()
+        document.setTextWidth(max(1, self.viewport().width()))
+        empty = not document.toPlainText().strip()
+        self.setVisible(not empty)
+        frame = self.frameWidth() * 2 + int(document.documentMargin())
+        self.setFixedHeight(min(self.most, int(document.size().height()) + frame + 4))
+
+    def resizeEvent(self, event: QEvent) -> None:
+        super().resizeEvent(event)  # type: ignore[arg-type]
+        self._fit()
 
 
 class StatCard(QFrame):
@@ -1153,6 +1199,69 @@ class Donut(QWidget):
             painter.drawText(QRectF(ring).adjusted(0, 22, 0, 22), Qt.AlignmentFlag.AlignCenter, self.caption)
 
 
+class Toggle(QAbstractButton):
+    """An on/off switch: a check box drawn like a phone's (Settings uses it)."""
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setText(text)
+        self.setAccessibleName(text)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFixedSize(46, 26)
+        self._pos = 0.0
+        self._slide = QVariantAnimation(self)
+        self._slide.setDuration(140)
+        self._slide.valueChanged.connect(self._moved)
+        self.toggled.connect(self._animate)
+
+    def sizeHint(self) -> QSize:
+        return QSize(46, 26)
+
+    def _animate(self, on: bool) -> None:
+        self._slide.stop()
+        if not self.isVisible():
+            self._moved(1.0 if on else 0.0)
+            return
+        self._slide.setStartValue(self._pos)
+        self._slide.setEndValue(1.0 if on else 0.0)
+        self._slide.start()
+
+    def _moved(self, value: object) -> None:
+        self._pos = float(value)  # type: ignore[arg-type]
+        self.update()
+
+    def paintEvent(self, _event: QEvent) -> None:
+        t = current()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        track = QRectF(2, 2, self.width() - 4, self.height() - 4)
+        colour = _blend(QColor(t.border), QColor(t.accent), self._pos)
+        if not self.isEnabled():
+            colour.setAlphaF(0.45)
+        if self.hasFocus():
+            painter.setPen(QPen(QColor(t.accent), 1.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(track.adjusted(-1.5, -1.5, 1.5, 1.5), track.height() / 2 + 1.5,
+                                    track.height() / 2 + 1.5)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(colour)
+        painter.drawRoundedRect(track, track.height() / 2, track.height() / 2)
+        knob = track.height() - 6
+        x = track.left() + 3 + (track.width() - knob - 6) * self._pos
+        painter.setBrush(QColor("#ffffff") if self.isEnabled() else QColor(t.panel_alt))
+        painter.drawEllipse(QRectF(x, track.top() + 3, knob, knob))
+
+
+def pill(text: str, kind: str = "Badge") -> QLabel:
+    """A small rounded label: "Badge" (accent), "SoonPill" (coming soon) or "PopularPill"."""
+    label = QLabel(text)
+    label.setObjectName(kind)
+    label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    return label
+
+
 def toast_level(event: Event) -> str:
     return {Level.SUCCESS: "success", Level.WARNING: "warning", Level.ERROR: "error",
             Level.CRITICAL: "critical"}.get(event.level, "info")
@@ -1174,14 +1283,18 @@ __all__ = [
     "Banner",
     "DiskMap",
     "F",
+    "FittedBrowser",
     "MapLegend",
+    "PaddedDelegate",
     "PreviewPane",
     "SourceList",
     "StatCard",
     "Toast",
     "ToastArea",
+    "Toggle",
     "beep",
     "device_icon_name",
     "device_subtitle",
+    "pill",
     "toast_level",
 ]

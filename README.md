@@ -82,7 +82,15 @@ Mac tips: if macOS says "The disk you attached was not readable by this computer
 
 While a job runs, the panel at the top shows how far it is, the reading speed (with a graph of the last two minutes), the time left and how much couldn't be read. The **Disk map** tab shows every part of the drive: blocks light up as they're read, the block being read glows, and pointing at a block tells you what it holds. You can **Pause**, **Stop** (everything recovered so far is kept) or **Finish now** (skip the remaining retry passes) at any time. To continue a stopped recovery, start a recovery into the same folder and tick **Resume**. Files that were already verified are skipped. Lifeboat keeps the computer from sleeping while a job runs.
 
-**Settings** (the gear at the top right): theme, text size and row spacing, the disk map animation (Smooth, Light or Off), notifications and pop-ups, the Recover window's defaults, how long to wait for slow or sleeping drives, and keeping the computer awake.
+**Settings** (the gear at the top right, or Ctrl+,) has a search box and these pages:
+
+* **Appearance:** theme (dark, light or the system's), accent color, text size, row spacing, the disk map animation (Smooth, Light or Off), file sizes as Windows counts them (1 KB = 1,024 bytes) or as macOS does (1,000), and the date format. Reports always use year-month-day.
+* **Scanning:** what a scan shows first (existing and deleted files, or one kind), system files, how long to re-read damaged file tables, and what Deep scan looks for by default (it remembers your last choice).
+* **Notifications, Recovery, Reading drives:** sounds, notifications and pop-ups; the Recover window's defaults and whether to open the folder or the report when it's done; how long to wait for slow or sleeping drives.
+* **System:** keeping the computer awake, offering administrator rights at start, how much goes into the log, and the log folder. Language and automatic updates are coming soon.
+* **Account & license** and **Keyboard shortcuts.**
+
+**Plans.** Lifeboat is in early access: every feature is unlocked for free until launch, shown by the **EARLY ACCESS** badge at the top. **Upgrade** shows the plans to come (Free, Pro, Technician) and the free trial; their buttons only say "coming soon" for now. Nothing asks for payment details. The plans, prices and features live in one file, `lifeboat/plans.py`.
 
 ## When the drive is really failing
 

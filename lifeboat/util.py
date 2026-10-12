@@ -10,18 +10,29 @@ _MIN_TS = -2208988800.0  # 1900-01-01
 _MAX_TS = 7258118400.0   # 2200-01-01
 
 
+_SIZE_BASE = 1024          # 1 KB = 1,024 bytes (as Windows shows sizes) or 1,000 (as macOS does)
+
+
+def set_size_units(decimal: bool) -> None:
+    """Show sizes as macOS does (1 KB = 1,000 bytes) or as Windows does (1 KB = 1,024 bytes)."""
+    global _SIZE_BASE
+    _SIZE_BASE = 1000 if decimal else 1024
+
+
 def format_size(num_bytes: int | float, *, exact: bool = False) -> str:
-    """Format a byte count the way Windows Explorer does (1 KB = 1024 bytes)."""
+    """Format a byte count the way Windows Explorer does (1 KB = 1024 bytes), or the way macOS
+    Finder does (1 KB = 1000 bytes) after ``set_size_units(True)``."""
+    base = float(_SIZE_BASE)
     n = float(num_bytes)
-    if n < 1024:
+    if n < base:
         whole = int(n)
         return f"{whole} byte" if whole == 1 else f"{whole} bytes"
     units = ("KB", "MB", "GB", "TB", "PB", "EB")
     value = n
     unit = "bytes"
     for unit in units:
-        value /= 1024.0
-        if value < 1024 or unit == units[-1]:
+        value /= base
+        if value < base or unit == units[-1]:
             break
     if value >= 100:
         text = f"{value:.0f} {unit}"
@@ -67,10 +78,32 @@ def format_duration(seconds: float | None) -> str:
 
 
 def format_timestamp(ts: float | None) -> str:
+    """A date and time for reports and logs: always year-month-day."""
     if ts is None:
         return ""
     try:
         return _dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+    except (OverflowError, OSError, ValueError):
+        return ""
+
+
+# How the app shows dates (Settings > Appearance); reports keep year-month-day.
+TIME_STYLES = {"ymd": "%Y-%m-%d %H:%M", "mdy": "%m/%d/%Y %I:%M %p", "dmy": "%d/%m/%Y %H:%M",
+               "dmy_dots": "%d.%m.%Y %H:%M"}
+_time_style = TIME_STYLES["ymd"]
+
+
+def set_time_style(key: str) -> None:
+    global _time_style
+    _time_style = TIME_STYLES.get(key, TIME_STYLES["ymd"])
+
+
+def display_time(ts: float | None) -> str:
+    """A date and time as the app shows it (the style chosen in Settings)."""
+    if ts is None:
+        return ""
+    try:
+        return _dt.datetime.fromtimestamp(ts).strftime(_time_style)
     except (OverflowError, OSError, ValueError):
         return ""
 

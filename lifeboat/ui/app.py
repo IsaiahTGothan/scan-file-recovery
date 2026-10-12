@@ -36,6 +36,10 @@ def _ask_for_admin(app: object) -> bool:
 
     if not can_elevate():
         return False
+    from .dialogs import pref
+
+    if not bool(pref("ask_admin")):          # Settings > System > Offer to restart as administrator
+        return False
     from PySide6.QtWidgets import QMessageBox
 
     from ..device.enumerate import is_admin
@@ -143,11 +147,13 @@ def _exercise_dialogs(window: QWidget) -> None:
         DeepScanDialog,
         ErrorDialog,
         ImageDialog,
+        LicensesDialog,
         RecoverDialog,
         SummaryDialog,
         UnlockDialog,
     )
     from .drive_check import DriveCheckDialog
+    from .plans_dialog import PlansDialog
     from .settings_dialog import SettingsDialog
 
     disk = DeviceInfo(path=r"\\.\PhysicalDrive9", kind="disk", size=1 << 30, model="Smoke test", serial="0")
@@ -155,7 +161,8 @@ def _exercise_dialogs(window: QWidget) -> None:
         RecoverDialog(window, disk, 3, 3000, 0, 0, 1000), ImageDialog(window, disk), DeepScanDialog(window, disk),
         SettingsDialog(window), AboutDialog(window), ErrorDialog(window, "Smoke test", "Not a real error."),
         SummaryDialog(window, RecoverySummary("", [], 0.0)), DriveCheckDialog(window),
-        UnlockDialog(window, "Smoke test", "a hint", "Not a real error."),
+        UnlockDialog(window, "Smoke test", "a hint", "Not a real error."), PlansDialog(window),
+        LicensesDialog(window), SettingsDialog(window, "Account & license"),
     ]
     for dialog in dialogs:
         dialog.show()

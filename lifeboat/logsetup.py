@@ -87,3 +87,10 @@ def setup_logging(verbose: bool = False) -> str:
     except OSError:
         pass
     return str(log_file)
+
+
+def set_detail(detailed: bool) -> None:
+    """How much goes into the log file: everything (for troubleshooting) or the main events."""
+    for handler in logging.getLogger().handlers:
+        if getattr(handler, "_lifeboat", False) and isinstance(handler, logging.FileHandler):
+            handler.setLevel(logging.DEBUG if detailed else logging.INFO)
