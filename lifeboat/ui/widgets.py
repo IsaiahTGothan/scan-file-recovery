@@ -256,7 +256,7 @@ class DiskMap(QWidget):
         self._base: QPixmap | None = None         # every block in its current colour
         self._version = -1
         self._hover = -1
-        self.setMinimumHeight(48)                 # a short window shrinks the blocks, not the file list
+        self.setMinimumHeight(32)                 # a short window shrinks the blocks, not the file list
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._timer = QTimer(self)                # the map's data: once a second

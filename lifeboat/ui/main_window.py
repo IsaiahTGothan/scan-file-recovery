@@ -685,6 +685,7 @@ class MainWindow(QMainWindow):
         p_layout.addWidget(self.problem_detail, 2)
         self.tabs.addTab(problems, icons.icon("warning"), "Problems")
         results = QWidget()
+        results.setObjectName("TabPage")
         r_layout = QVBoxLayout(results)
         r_layout.setContentsMargins(0, 4, 0, 0)
         r_bar = QHBoxLayout()
@@ -714,7 +715,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(results, icons.icon("report"), "Results")
         disk = QWidget()
         d_layout = QVBoxLayout(disk)
-        d_layout.setContentsMargins(6, 6, 6, 6)
+        d_layout.setContentsMargins(4, 4, 4, 4)
         self.legend = MapLegend()
         self.diskmap = DiskMap()
         d_layout.addWidget(self.legend)
@@ -722,7 +723,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(disk, icons.icon("grid"), "Disk map")
         # They scroll: on a short screen the file list above gets the room, not these.
         for view in (self.activity, self.problems, self.problem_detail, self.results):
-            view.setMinimumHeight(40)
+            view.setMinimumHeight(32)
         return self.tabs
 
     def _help_menu(self) -> QMenu:
@@ -798,7 +799,7 @@ class MainWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("StatusBar")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(14, 6, 14, 6)
+        layout.setContentsMargins(14, 4, 14, 4)
         layout.setSpacing(10)
         self.status_text = ElidedLabel("Ready")
         self.status_text.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
