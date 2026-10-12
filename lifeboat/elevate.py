@@ -45,7 +45,7 @@ def relaunch_elevated(args: list[str]) -> bool:
             done = subprocess.run(["/usr/bin/osascript", "-e", script], capture_output=True, text=True,
                                   timeout=600, check=False)
             if done.returncode != 0:
-                log.info("Restart with administrator rights cancelled or failed: %s", done.stderr.strip())
+                log.info("Restart with administrator rights canceled or failed: %s", done.stderr.strip())
             return done.returncode == 0
     except (OSError, subprocess.TimeoutExpired, AttributeError) as exc:
         log.warning("Could not restart with administrator rights: %s", exc)

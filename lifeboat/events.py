@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .errors import Cancelled, describe
+from .util import format_size, plural
 
 log = logging.getLogger("lifeboat")
 
@@ -121,7 +122,7 @@ class Progress:
     """Snapshot of a long-running operation, delivered a few times per second."""
 
     phase: str
-    done: int = 0                 # units of work done (bytes unless stated)
+    done: int = 0                 # units of work done: bytes, or ``unit``s
     total: int = 0
     item: str = ""                # current file / area
     rate: float = 0.0             # bytes per second (smoothed)
@@ -133,6 +134,13 @@ class Progress:
     bad_bytes: int = 0
     pass_index: int = 0
     pass_count: int = 0
+    unit: str = ""                 # what done and total count ("record"), or empty for bytes
+
+    def amount(self) -> str:
+        """How far along, in words: "1.20 GB of 3.00 GB", or "12 of 40 files" for a ``unit``."""
+        if self.unit:
+            return f"{self.done:,} of {plural(self.total, self.unit)}"
+        return f"{format_size(self.done)} of {format_size(self.total)}"
 
     @property
     def fraction(self) -> float:

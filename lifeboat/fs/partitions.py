@@ -342,7 +342,7 @@ def read_partition_table(reader: RescueReader) -> PartitionTable:
         protective = [e for e in mbr.entries if e.type_code == "0xEE"]
         if protective:
             mbr.warnings.append(
-                "The disk has a protective MBR but no readable GPT. Run a Deep Scan to find the partitions.")
+                "The disk has a protective MBR but no readable GPT. Run a Deep scan to find the partitions.")
             mbr.entries = [e for e in mbr.entries if e.type_code != "0xEE"]
         return mbr
     return PartitionTable("None", [], reader.sector_size, ["No partition table was found."])

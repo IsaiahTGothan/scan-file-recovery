@@ -81,7 +81,7 @@ def run_with_device_retry(
                 code=E_SOURCE_HUNG,
                 title="Source drive not responding",
                 message=("The drive is not answering. Press Retry to keep trying, or unplug it, "
-                         "wait 10 seconds and reconnect it - Lifeboat continues automatically."),
+                         "wait 10 seconds and reconnect it: Lifeboat continues automatically."),
                 options=(Choice.RETRY, Choice.ABORT),
                 auto_retry=lambda: try_reattach(reader) and _answers(reader),
             ))

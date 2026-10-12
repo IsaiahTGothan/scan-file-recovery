@@ -31,6 +31,7 @@ from ..errors import (
     ReadError,
     ReadErrorKind,
 )
+from ..util import plural
 from .base import (
     NO_MEDIA,
     NOT_ANSWERING,
@@ -565,7 +566,7 @@ class WindowsDevice(BlockDevice):
                 WaitForSingleObject(zombie.event, wait_ms)
         self._reap()
         if self._zombies:
-            raise DeviceHungError("The drive has not finished a cancelled read and is not responding.")
+            raise DeviceHungError("The drive has not finished a canceled read and is not responding.")
 
     def read_raw(self, offset: int, length: int, timeout: float | None = None) -> bytes:
         self._check_aligned(offset, length)
@@ -605,7 +606,7 @@ class WindowsDevice(BlockDevice):
                     event = CreateEventW(None, True, False, None)
                     self._event = int(event) if event else 0
                     raise ReadError(
-                        f"Read timed out after {timeout:.0f} s and could not be cancelled",
+                        f"Read timed out after {timeout:.0f} s and could not be canceled",
                         kind=ReadErrorKind.TIMEOUT, offset=offset, length=length,
                     )
             transferred = DWORD(0)
@@ -721,10 +722,10 @@ def read_health(handle: int) -> HealthInfo | None:
         for ident, label in ((5, "reallocated"), (197, "pending"), (198, "uncorrectable")):
             value = raw.get(ident, 0)
             if value:
-                summary.append(f"{value} {label} sectors")
+                summary.append(plural(value, f"{label} sector"))
                 status = "Caution"
         if raw.get(199):
-            summary.append(f"{raw[199]} cable (CRC) errors - try another cable/port")
+            summary.append(f"{plural(raw[199], 'cable (CRC) error')}: try another cable or port")
         if 9 in raw:
             summary.append(f"{raw[9]:,} power-on hours")
         if predict:

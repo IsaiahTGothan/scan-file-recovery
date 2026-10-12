@@ -43,7 +43,7 @@ from ..fs.ntfs import NtfsBoot
 from ..fs.partitions import PartitionEntry, PartitionTable, read_partition_table
 from ..rescue.reader import ReadMode, RescueReader
 from ..resilience import run_with_device_retry
-from ..util import format_size
+from ..util import format_size, plural
 
 log = logging.getLogger("lifeboat.scan")
 T = TypeVar("T")
@@ -172,7 +172,7 @@ class Scanner:
                 entries = [whole]
             else:
                 self.events.warning("No partitions or filesystems were found on this drive. "
-                                    "Run a Deep Scan to search for lost partitions and files.",
+                                    "Run a Deep scan to search for lost partitions and files.",
                                     code=E_NO_PARTITIONS)
         for entry in entries:
             self.control.check()
@@ -206,7 +206,7 @@ class Scanner:
         self.reader.flush_reports()
         files, deleted, total = result.counts()
         self.events.success(
-            f"Scan finished: {files:,} files ({deleted:,} deleted), {format_size(total)}, "
+            f"Scan finished: {plural(files, 'file')} ({deleted:,} deleted), {format_size(total)}, "
             f"in {result.seconds:.0f} s.")
         return result
 
@@ -246,13 +246,13 @@ class Scanner:
                 rate = meter.update(pos)
                 self.progress(Progress(
                     "Deep scan: searching the whole drive", pos, size, rate=rate, eta=meter.eta(pos, size),
-                    item=f"{carver.count if carver else 0:,} files found by signature, "
-                         f"{len(candidates)} partition candidates",
+                    item=f"{plural(carver.count if carver else 0, 'file')} found by signature, "
+                         f"{plural(len(candidates), 'partition candidate')}",
                 ))
         for vr in feeders:
             added = vr.volume.deep_finish(self.progress)  # type: ignore[union-attr]
             if added:
-                self.events.info(f"Deep scan found {added:,} more deleted files in {vr.title}.")
+                self.events.info(f"Deep scan found {plural(added, 'more deleted file')} in {vr.title}.")
         if self.options.find_partitions:
             self._add_found_partitions(result, candidates, known)
         if carver is not None and carver.count:
@@ -264,10 +264,10 @@ class Scanner:
                                                root=carver.root, found_by_deep_scan=True))
         result.seconds += time.monotonic() - started
         self.reader.flush_reports()
+        lost = sum(1 for v in result.volumes if v.found_by_deep_scan and v.volume and v.volume.kind != "Carved")
         self.events.success(
-            f"Deep scan finished: {result.carved:,} files found by signature, "
-            f"{sum(1 for v in result.volumes if v.found_by_deep_scan and v.volume and v.volume.kind != 'Carved')} "
-            "lost partition(s).")
+            f"Deep scan finished: {plural(result.carved, 'file')} found by signature, "
+            f"{plural(lost, 'lost partition')}.")
         return result
 
     def _find_boot_sectors(self, base: int, data: bytes, out: dict[int, Probe]) -> None:

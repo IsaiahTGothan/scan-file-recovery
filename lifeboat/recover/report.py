@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from .. import build_info
 from ..branding import APP_FULL_NAME, PUBLISHER
 from ..errors import describe
-from ..util import format_duration, format_size
+from ..util import format_duration, format_size, plural
 from .destination import display_path, long_path
 
 if TYPE_CHECKING:
@@ -113,7 +113,8 @@ def build_html(job: RecoveryJob, summary: RecoverySummary) -> bytes:
 
     other_html = "".join(row(t) for t in rows_other[:HTML_ROW_LIMIT])
     more = len(rows_other) - HTML_ROW_LIMIT
-    more_html = (f"<p class='muted'>{more:,} more files are listed in {esc(REPORT_CSV)}.</p>"
+    more_html = (f"<p class='muted'>{plural(more, 'more file')} {'is' if more == 1 else 'are'} listed in "
+                 f"{esc(REPORT_CSV)}.</p>"
                  if more > 0 else "")
     code_rows = "".join(
         f"<tr><td class='mono'>{esc(c)}</td><td>{esc(describe(c).title)}</td><td>{esc(describe(c).hint)}</td></tr>"

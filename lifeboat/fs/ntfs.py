@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from ..errors import E_BOOT_BACKUP, E_META_CORRUPT, E_META_UNREADABLE, FilesystemError
 from ..events import EventBus, JobControl, Progress
 from ..rescue.reader import ReadMode, RescueReader
-from ..util import filetime_to_unix, format_size
+from ..util import filetime_to_unix, format_size, plural
 from .model import INVALID, SPARSE, CompressedRuns, Extent, F, FileLayout, Node, Volume
 
 ROOT_RECORD = 5
@@ -418,7 +418,7 @@ class NtfsVolume(Volume):
         if not runs:
             self._warn(
                 "The MFT location could not be read; assuming it is stored in one piece. "
-                "Some files may be missing - run a Deep Scan for more.",
+                "Some files may be missing: run a Deep scan for more.",
                 E_META_UNREADABLE,
             )
             clusters = max(1, (self.size - boot.mft_lcn * self.cluster_size) // self.cluster_size)
@@ -427,7 +427,7 @@ class NtfsVolume(Volume):
             self.mft_assumed = True
         self._set_mft_extents(runs, size)
         if self.events is not None:
-            self.events.debug(f"MFT read from {source}: {len(self.mft_extents)} fragment(s)")
+            self.events.debug(f"MFT read from {source}: {plural(len(self.mft_extents), 'fragment')}")
 
     def _extend_mft_runs(self, rec0: Record, runs: list[tuple[int, int | None, int]],
                          size: int) -> tuple[list[tuple[int, int | None, int]], int]:
@@ -559,8 +559,8 @@ class NtfsVolume(Volume):
                 now = time.monotonic()
                 if progress is not None and now - last_report > 0.25:
                     last_report = now
-                    progress(Progress("Reading file table (MFT)", done, total, items_done=done,
-                                      items_total=total, item=f"{done:,} of {total:,} records"))
+                    progress(Progress("Reading file table (MFT)", done * rs, total * rs,
+                                      item=f"{done:,} of {plural(total, 'record')}"))
         if self.mft_assumed:
             self.mft_extents = [(f, d, min(n, done)) for f, d, n in self.mft_extents]
             self.total_records = done
@@ -593,7 +593,7 @@ class NtfsVolume(Volume):
                     still.extend(pending[idx:])
                     break
                 if progress is not None:
-                    progress(Progress("Re-reading damaged parts of the MFT", idx, len(pending),
+                    progress(Progress("Re-reading damaged parts of the MFT", idx, len(pending), unit="part",
                                       item=f"records {first:,}-{first + count - 1:,}"))
                 outcome = self.reader.read(disk, count * rs, mode)
                 problems = [(s - outcome.offset, e - outcome.offset) for s, e in outcome.unread + outcome.bad]
@@ -677,7 +677,7 @@ class NtfsVolume(Volume):
             if index % 50000 == 0:
                 self._check()
                 if progress is not None:
-                    progress(Progress("Rebuilding folders", index, total))
+                    progress(Progress("Rebuilding folders", index, total, unit="record"))
             if rec.num == ROOT_RECORD:
                 continue
             names = _primary_names(rec.names)

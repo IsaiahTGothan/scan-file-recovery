@@ -84,7 +84,7 @@ class _PlanCard(QFrame):
         if plan.free:
             included = QPushButton("Free forever")
             included.setEnabled(False)
-            included.setToolTip("Scanning, previews and small recoveries stay free after launch.")
+            included.setToolTip("Scanning, previews and small recoveries stay free after launch")
             included.setMinimumHeight(38)
             layout.addWidget(included)
         else:

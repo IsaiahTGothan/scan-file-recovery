@@ -125,6 +125,12 @@ def test_window_scan_select_recover(app, images, tmp_path, monkeypatch):
     window.selection.toggle(volume_root.child("DCIM"), True)
     assert window.selection.count == 2
     assert "Recover 2 files" in window.btn_recover.text()
+    one = next(n for n in volume_root.child("DCIM").walk() if n.children is None)
+    window.selection.toggle(volume_root.child("DCIM"), False)
+    window.selection.toggle(one, True)
+    assert "Recover 1 file" in window.btn_recover.text() and "files" not in window.btn_recover.text()
+    window.selection.toggle(volume_root.child("DCIM"), True)
+    assert window.selection.count == 2
     # filters
     window.search.setText("*.jpg")
     window._apply_filter()

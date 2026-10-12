@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import DeviceGoneError, DeviceOpenError, ReadError, ReadErrorKind
+from ..util import plural
 from .base import BlockDevice, DeviceInfo
 
 IMAGE_EXTENSIONS = (".img", ".dd", ".raw", ".bin", ".iso", ".ima", ".001", ".vhd", ".dsk", ".image")
@@ -99,7 +100,7 @@ class ImageDevice(BlockDevice):
                 self._segments[0].length = total
                 notes.append("Fixed-size VHD")
         else:
-            notes.append(f"Split image in {len(parts)} parts")
+            notes.append(f"Split image in {plural(len(parts), 'part')}")
         if sector_size not in (512, 1024, 2048, 4096):
             raise DeviceOpenError(f"Unsupported sector size {sector_size}")
         usable = total - (total % sector_size)

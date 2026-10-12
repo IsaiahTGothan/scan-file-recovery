@@ -64,7 +64,7 @@ from ..fs.model import F, FileLayout, Node
 from ..rescue.reader import MODE_LABELS, ReadMode, RescueReader
 from ..rescue.sectormap import SectorMap, State
 from ..resilience import run_with_device_retry
-from ..util import format_size
+from ..util import format_size, plural
 from .destination import is_disk_full, is_gone, long_path, make_dirs, set_times, volume_filesystem
 from .journal import META_DIR, SOURCE_MAP, Journal, JournalEntry
 from .names import NameSpace, sanitize, with_tag
@@ -395,7 +395,7 @@ class RecoveryJob:
 
             self._sync_each_file = not reads_unbuffered(long_path(self.journal.path))
         self.events.info(
-            f"Recovering {len(self.tasks):,} files ({format_size(sum(t.size for t in self.tasks))}) "
+            f"Recovering {plural(len(self.tasks), 'file')} ({format_size(sum(t.size for t in self.tasks))}) "
             f"to {self.job_dir}")
 
     def _apply_resume(self) -> None:
@@ -446,7 +446,8 @@ class RecoveryJob:
             task.notes.append("Recovered in an earlier session")
             reused += 1
         if reused:
-            self.events.info(f"Resuming: {reused:,} files were already recovered and verified.")
+            self.events.info(f"Resuming: {plural(reused, 'file')} {'was' if reused == 1 else 'were'} "
+                             "already recovered and verified.")
 
     # ----------------------------------------------------------------- passes
     def _run_passes(self) -> None:
@@ -477,8 +478,9 @@ class RecoveryJob:
             self._done_bytes = 0
             self._meter.reset()
             self.events.info(
-                f"Pass {number} of {len(passes)}: {MODE_LABELS[mode].lower()} in {len(relevant):,} damaged "
-                f"file(s) ({format_size(self._pass_total)}). You can stop at any time; what was recovered is kept.")
+                f"Pass {number} of {len(passes)}: {MODE_LABELS[mode].lower()} in "
+                f"{plural(len(relevant), 'damaged file')} ({format_size(self._pass_total)}). You can stop at any "
+                "time; what was recovered is kept.")
             for index, task in enumerate(relevant):
                 self.control.check()
                 if self._finish_early.is_set():
@@ -738,7 +740,7 @@ class RecoveryJob:
         task.code = code
         task.message = message
         self._errors += 1
-        self.events.error(f"Not recovered: {task.source_path} - {message}", code=code, path=task.source_path)
+        self.events.error(f"Not recovered: {task.source_path} \u2014 {message}", code=code, path=task.source_path)
         self._journal(task)
 
     def _journal(self, task: FileTask) -> None:

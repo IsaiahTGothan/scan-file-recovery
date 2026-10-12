@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from ..errors import E_BOOT_BACKUP, E_META_CORRUPT, E_META_UNREADABLE
 from ..events import EventBus, JobControl, Progress
 from ..rescue.reader import ReadMode, RescueReader
-from ..util import fat_datetime
+from ..util import fat_datetime, plural
 from .model import Extent, F, FileLayout, Node, Volume
 
 ATTR_READONLY = 0x01
@@ -578,7 +578,7 @@ class FatVolume(Volume):
                 else:
                     files += 1
             if progress is not None and self.directories % 50 == 0:
-                progress(Progress("Reading folders", self.directories, 0, item=f"{files:,} files found"))
+                progress(Progress("Reading folders", self.directories, 0, item=f"{plural(files, 'file')} found"))
         if self.fat.unreadable_bytes:
             self._warn("Parts of both FAT copies are unreadable; some file locations were estimated.",
                        E_META_UNREADABLE)

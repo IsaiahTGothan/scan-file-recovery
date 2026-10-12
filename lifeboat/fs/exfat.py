@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from ..errors import E_BOOT_BACKUP, E_META_CORRUPT, E_META_UNREADABLE
 from ..events import EventBus, JobControl, Progress
 from ..rescue.reader import ReadMode, RescueReader
-from ..util import exfat_timestamp
+from ..util import exfat_timestamp, plural
 from .model import Extent, F, FileLayout, Node, Volume
 
 ATTR_READONLY = 0x01
@@ -418,7 +418,7 @@ class ExfatVolume(Volume):
                 else:
                     files += 1
             if progress is not None and self.directories % 50 == 0:
-                progress(Progress("Reading folders", self.directories, 0, item=f"{files:,} files found"))
+                progress(Progress("Reading folders", self.directories, 0, item=f"{plural(files, 'file')} found"))
         self.root = root
         return root
 

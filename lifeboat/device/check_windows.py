@@ -14,6 +14,7 @@ if sys.platform != "win32":  # pragma: no cover - imported only on Windows
     raise ImportError("lifeboat.device.check_windows is only available on Windows")
 
 from ..errors import DeviceOpenError
+from ..util import plural
 from .check import PROBE_TIMEOUT, CheckResult, Progress, TimedOut, read_test, with_timeout
 from .windows import (
     CloseHandle,
@@ -48,7 +49,7 @@ def _check_disk(result: CheckResult, admin: bool) -> None:
         size, desc = with_timeout(lambda: _probe_disk(result.path), PROBE_TIMEOUT)
     except TimedOut:
         result.read_ok, result.read_error_kind = False, "timeout"
-        result.read_error = f"it didn't answer within {PROBE_TIMEOUT:.0f} seconds"
+        result.read_error = f"it didn't answer within {plural(round(PROBE_TIMEOUT), 'second')}"
         return
     except DeviceOpenError as exc:
         log.info("Drive check: cannot open %s: %s", result.path, exc)

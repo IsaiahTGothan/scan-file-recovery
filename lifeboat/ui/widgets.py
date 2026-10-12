@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import math
+import sys
 import time
 from collections import deque
 from collections.abc import Callable, Iterable
@@ -22,7 +23,7 @@ from PySide6.QtCore import (
     QVariantAnimation,
     Signal,
 )
-from PySide6.QtGui import QAction, QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QAction, QColor, QFont, QImage, QKeySequence, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import (
     QAbstractButton,
     QApplication,
@@ -58,7 +59,7 @@ from ..events import Choice, Event, Level, Progress
 from ..fs.apfs import LockedVolume
 from ..fs.model import F, Node
 from ..rescue.sectormap import PARTIAL, SectorMap, State
-from ..util import display_time, format_duration, format_rate, format_size
+from ..util import display_time, format_duration, format_rate, format_size, plural
 from . import icons
 from .bridge import PendingDecision
 from .models import category, category_icon, chance, status_text
@@ -529,7 +530,7 @@ class MapLegend(QWidget):
         if block:
             text += f"   ·   1 block = {format_size(block)}"
         self.totals.setText(text)
-        self.totals.setToolTip("Point at a block in the map to see what it holds.")
+        self.totals.setToolTip("Point at a block in the map to see what it holds")
 
 
 # --------------------------------------------------------------- notifications
@@ -818,7 +819,7 @@ class PreviewPane(QFrame):
         rows = []
         if node.children is None:
             text, colour = chance(node)
-            rows.append(("Size", f"{format_size(node.size)} ({node.size:,} bytes)"))
+            rows.append(("Size", format_size(node.size, exact=True)))
             rows.append(("Status", status_text(node)))
             rows.append(("Recovery chance", f"<b style='color:{colour}'>{text}</b>"))
             rows.append(("Type", category(node)))
@@ -1532,7 +1533,7 @@ class JobPanel(QFrame):
             self.bar.setRange(0, 1000)
             self.bar.setValue(int(p.fraction * 1000))
             self.percent.setText(f"{p.fraction * 100:.1f}%" if p.fraction < 0.999 else "100%")
-            self.done.set(f"{format_size(p.done)} of {format_size(p.total)}")
+            self.done.set(p.amount())
         else:
             self.bar.setRange(0, 0)
             self.percent.setText("")
@@ -1603,7 +1604,7 @@ class CategoryChips(QWidget):
             files, size = (total_files, total_bytes) if name == self.names[0] else counts.get(name, (0, 0))
             short = "All" if name == self.names[0] else name.split(" & ")[0]
             chip.setText(f"{short}  {files:,}")
-            chip.setToolTip(f"{name}: {files:,} files, {format_size(size)}")
+            chip.setToolTip(f"{name}: {plural(files, 'file')}, {format_size(size)}")
             chip.setVisible(bool(files) or name == self.names[0] or chip.isChecked())
 
     def reset(self) -> None:
@@ -1705,6 +1706,15 @@ class Toggle(QAbstractButton):
         x = track.left() + 3 + (track.width() - knob - 6) * self._pos
         painter.setBrush(QColor("#ffffff") if self.isEnabled() else QColor(t.panel_alt))
         painter.drawEllipse(QRectF(x, track.top() + 3, knob, knob))
+
+
+def key_text(combo: str) -> str:
+    """A shortcut as this system writes it: "Ctrl+R" on Windows, "\u2318R" on a Mac."""
+    if combo == "Enter":
+        return "Return" if sys.platform == "darwin" else "Enter"
+    if combo in ("Space", "Double-click"):
+        return combo
+    return QKeySequence(combo).toString(QKeySequence.SequenceFormat.NativeText)
 
 
 def clearable(edit: QLineEdit, tip: str = "Clear") -> None:

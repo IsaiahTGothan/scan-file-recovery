@@ -37,7 +37,7 @@ from .recover import RecoveryJob, RecoveryOptions, check_destination
 from .rescue.reader import ReadPolicy, RescueReader
 from .rescue.sectormap import SectorMap, State
 from .scan import Scanner, ScanOptions
-from .util import format_duration, format_rate, format_size
+from .util import format_duration, format_rate, format_size, plural
 
 
 class Console:
@@ -59,6 +59,8 @@ class Console:
             bits.append(format_rate(p.rate))
         if p.eta:
             bits.append(f"{format_duration(p.eta)} left")
+        if p.bad_bytes:
+            bits.append(f"{format_size(p.bad_bytes)} unreadable")
         if p.item:
             bits.append(p.item[-60:])
         text = " | ".join(bits)
@@ -141,7 +143,7 @@ def cmd_selftest(_args: argparse.Namespace) -> int:
             print(f"FAILED  {name}: {exc}")
         else:
             print(f"OK      {name}")
-    print("Self-test passed." if not failed else f"{failed} check(s) failed.")
+    print("Self-test passed." if not failed else f"{plural(failed, 'check')} failed.")
     return 1 if failed else 0
 
 
@@ -238,7 +240,7 @@ def cmd_scan(args: argparse.Namespace) -> int:
         state = vr.volume.describe() if vr.volume else (vr.error or "not readable")
         print(f"{vr.title}: {state}")
     total, deleted, size = result.counts()
-    print(f"{total:,} files ({deleted:,} deleted), {format_size(size)}")
+    print(f"{plural(total, 'file')} ({deleted:,} deleted), {format_size(size)}")
     return 0
 
 
@@ -258,7 +260,7 @@ def cmd_recover(args: argparse.Namespace) -> int:
         print(f"{'ERROR' if issue.blocking else 'WARNING'}: {issue.message} [{issue.code}]", file=sys.stderr)
     if not report.ok:
         return 2
-    print(f"Recovering {len(files):,} files ({format_size(size)}) to {args.destination}", file=sys.stderr)
+    print(f"Recovering {plural(len(files), 'file')} ({format_size(size)}) to {args.destination}", file=sys.stderr)
     options = RecoveryOptions(destination=args.destination, job_folder=not args.no_job_folder and not args.resume,
                               verify=not args.no_verify, thoroughness=args.thoroughness,
                               mark_damaged=args.mark_damaged, resume=args.resume)

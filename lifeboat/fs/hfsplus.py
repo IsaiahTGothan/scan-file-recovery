@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from ..errors import E_BOOT_BACKUP, E_META_CORRUPT, E_META_UNREADABLE
 from ..events import EventBus, JobControl, Progress
 from ..rescue.reader import ReadMode, RescueReader
-from ..util import format_size, hfs_time
+from ..util import format_size, hfs_time, plural
 from .applecomp import CompressionError, chunk_table, parse_decmpfs, table_bytes_needed
 from .model import INVALID, CompressedChunks, Extent, F, FileLayout, Node, Volume
 
@@ -525,8 +525,9 @@ class HfsPlusVolume(Volume):
             self.overlay = changes
             self._overlay_unit = block
             self._overlay_keys = sorted(changes)
-            self._warn(f"The drive was disconnected without being ejected: Lifeboat applied {transactions} unfinished "
-                       "change(s) from the journal, in memory only (the drive is not written to).", E_META_CORRUPT)
+            self._warn(f"The drive was disconnected without being ejected: Lifeboat applied "
+                       f"{plural(transactions, 'unfinished change')} from the journal, in memory only (the drive "
+                       "is not written to).", E_META_CORRUPT)
 
     # ---------------------------------------------------------------- B-trees
     def _scan_btree(self, extents: list[Extent], fork_size: int, what: str,
@@ -562,14 +563,16 @@ class HfsPlusVolume(Volume):
             now = time.monotonic()
             if progress is not None and now - last_report > 0.25:
                 last_report = now
-                progress(Progress(f"Reading the {what}", first + count, total, items_done=first + count,
-                                  items_total=total, item=f"{first + count:,} of {total:,} nodes"))
+                progress(Progress(f"Reading the {what}", (first + count) * node_size, total * node_size,
+                                  item=f"{first + count:,} of {plural(total, 'node')}"))
         if pending:
             pending = self._retry_nodes(extents, node_size, pending, used, visit, what, progress)
         if pending:
             self.unreadable_nodes += len(pending)
-            self._warn(f"{len(pending):,} nodes ({format_size(len(pending) * node_size)}) of the {what} are "
-                       "unreadable; files they described may be missing.", E_META_UNREADABLE)
+            lost = len(pending)
+            self._warn(f"{plural(lost, 'node')} ({format_size(lost * node_size)}) of the {what} "
+                       f"{'is' if lost == 1 else 'are'} unreadable; files {'it' if lost == 1 else 'they'} "
+                       "described may be missing.", E_META_UNREADABLE)
         return node_size, first_leaf
 
     def _retry_nodes(self, extents: list[Extent], node_size: int, pending: list[int], used: bytes | None,
@@ -584,7 +587,7 @@ class HfsPlusVolume(Volume):
                     still.extend(pending[index:])
                     break
                 if progress is not None:
-                    progress(Progress(f"Re-reading damaged parts of the {what}", index, len(pending)))
+                    progress(Progress(f"Re-reading damaged parts of the {what}", index, len(pending), unit="part"))
                 data, bad = self._read_extents(extents, number * node_size, node_size, mode)
                 if bad:
                     still.append(number)

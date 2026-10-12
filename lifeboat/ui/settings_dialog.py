@@ -10,11 +10,12 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -37,7 +38,7 @@ from ..logsetup import log_dir
 from . import icons
 from .dialogs import DEFAULTS, pref, settings
 from .theme import ACCENTS, current
-from .widgets import ScrollArea, Toggle, clearable, pill
+from .widgets import ScrollArea, Toggle, clearable, key_text, pill
 
 # (key, label) choices of each list setting, in display order
 CHOICES: dict[str, list[tuple[str, str]]] = {
@@ -243,23 +244,22 @@ class SettingsDialog(QDialog):
             self.page_list.append(page_widget)
         self.nav.currentRowChanged.connect(self.pages.setCurrentIndex)
         self.nav.setCurrentRow(self.PAGES.index(page) if page in self.PAGES else 0)
-        buttons = QHBoxLayout()
+        # A button box puts Save and Cancel in the order of the system, like the other windows' buttons.
+        buttons = QDialogButtonBox()
         restore = QPushButton("Restore defaults")
         icons.put(restore, "refresh")
         restore.setToolTip("Put every setting back to how Lifeboat comes (nothing is saved until you press Save)")
         restore.clicked.connect(self.restore_defaults)
-        cancel = QPushButton("Cancel")
-        cancel.clicked.connect(self.reject)
         save = QPushButton("Save")
         icons.put(save, "check", "white")
         save.setProperty("primary", True)
         save.setDefault(True)
         save.clicked.connect(self.save)
-        buttons.addWidget(restore)
-        buttons.addStretch(1)
-        buttons.addWidget(cancel)
-        buttons.addWidget(save)
-        outer.addLayout(buttons)
+        buttons.addButton(restore, QDialogButtonBox.ButtonRole.ResetRole)
+        buttons.addButton(save, QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
+        buttons.rejected.connect(self.reject)
+        outer.addWidget(buttons)
         self.load()
 
     # ------------------------------------------------------------------ controls
@@ -412,7 +412,7 @@ class SettingsDialog(QDialog):
                   "At start, when Lifeboat can't read drives directly (Windows and macOS).")
         logs = page.section("Logs")
         logs.row("Log detail", self._combo("log_detail"))
-        open_logs = QPushButton("Open the log folder")
+        open_logs = QPushButton("Open log folder")
         icons.put(open_logs, "open")
         open_logs.clicked.connect(self._open_logs)
         logs.row("Log files", open_logs, "Send them with a support request.")
@@ -479,9 +479,7 @@ class SettingsDialog(QDialog):
         page = _Page("Keyboard shortcuts")
         keys = page.section("In the main window")
         for combo, what in SHORTCUTS:
-            native = combo if combo in ("Enter", "Space", "Double-click") else \
-                QKeySequence(combo).toString(QKeySequence.SequenceFormat.NativeText)
-            label = QLabel(native)
+            label = QLabel(key_text(combo))
             label.setObjectName("Keycap")
             keys.row(what, label)
         page.finish()

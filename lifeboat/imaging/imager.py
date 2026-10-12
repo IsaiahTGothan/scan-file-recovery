@@ -254,7 +254,7 @@ class ImagingJob:
         self.progress(Progress(
             phase=self._phase, done=good, total=self.reader.size, rate=rate,
             eta=remaining / rate if rate > 1 and self._pass_index == 1 else None,
-            item=f"Position {format_size(position)} - {format_size(totals[State.BAD])} bad",
+            item=f"Position {format_size(position)}",
             errors=self.reader.stats.errors, bad_bytes=totals[State.BAD],
             pass_index=self._pass_index, pass_count=self._pass_count,
         ))

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from ..errors import E_OPEN_DENIED, DeviceGoneError, DeviceHungError, DeviceOpenError, ReadError
-from ..util import format_capacity
+from ..util import format_capacity, plural
 from .base import BlockDevice
 
 log = logging.getLogger("lifeboat.device")
@@ -313,7 +313,7 @@ def read_test(opener: Callable[[str], BlockDevice], result: CheckResult) -> None
         found = with_timeout(lambda: _read_test(opener, result.path), limit)
     except TimedOut:
         result.read_ok, result.read_error_kind = False, "timeout"
-        result.read_error = f"it didn't answer within {limit:.0f} seconds"
+        result.read_error = f"it didn't answer within {plural(round(limit), 'second')}"
         return
     result.tested, result.read_ok, result.read_seconds = found.tested, found.read_ok, found.read_seconds
     result.read_error, result.read_error_kind = found.read_error, found.read_error_kind

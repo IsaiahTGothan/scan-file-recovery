@@ -40,7 +40,7 @@ from ..errors import (
     ReadErrorKind,
 )
 from ..events import Event, EventBus, JobControl, Level, Throttle
-from ..util import align_down, align_up, format_size, merge_ranges
+from ..util import align_down, align_up, format_size, merge_ranges, plural
 from .cache import PageCache
 from .sectormap import SectorMap, State
 
@@ -459,8 +459,9 @@ class RescueReader:
                 return False
             if not told and self.events is not None:
                 told = True
-                self.events.info(f"The source drive is not answering. Waiting up to "
-                                 f"{self.policy.wake_seconds:.0f} seconds for it (it may be waking up from sleep).")
+                wait = plural(round(self.policy.wake_seconds), "second")
+                self.events.info(f"The source drive is not answering. Waiting up to {wait} for it (it may be "
+                                 "waking up from sleep).")
             self._check()
             time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
 
@@ -492,8 +493,8 @@ class RescueReader:
                     if not self._present():
                         raise DeviceGoneError("The source drive disconnected.") from err
                     raise DeviceHungError(
-                        f"The source drive did not answer {self.policy.max_consecutive_timeouts} "
-                        "reads in a row."
+                        f"The source drive did not answer {plural(self.policy.max_consecutive_timeouts, 'read')} "
+                        "in a row."
                     ) from err
             else:
                 self._timeouts_in_row = 0

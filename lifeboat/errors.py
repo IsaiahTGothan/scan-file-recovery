@@ -9,6 +9,7 @@ plain-language explanation and the suggested next step.
 from __future__ import annotations
 
 import enum
+import sys
 from dataclasses import dataclass
 
 
@@ -20,6 +21,9 @@ class ErrorInfo:
 
 
 _CATALOGUE: dict[str, ErrorInfo] = {}
+
+# File systems that hold files of 4 GB or more and that this computer writes to (a Mac can't write NTFS).
+BIG_FILE_FORMATS = "exFAT or APFS" if sys.platform == "darwin" else "NTFS or exFAT"
 
 
 def _register(code: str, title: str, hint: str) -> str:
@@ -72,12 +76,12 @@ E_SOURCE_CHANGED = _register(
 E_NO_PARTITIONS = _register(
     "LB-201",
     "No partition table or filesystem was found",
-    "Run a Deep Scan to search for lost partitions and files by signature.",
+    "Run a Deep scan to search for lost partitions and files by signature.",
 )
 E_FS_UNSUPPORTED = _register(
     "LB-202",
     "Unsupported filesystem",
-    "Lifeboat cannot browse this filesystem. A Deep Scan can still recover "
+    "Lifeboat cannot browse this filesystem. A Deep scan can still recover "
     "common file types by signature.",
 )
 E_BOOT_BACKUP = _register(
@@ -89,11 +93,14 @@ E_META_UNREADABLE = _register(
     "LB-204",
     "Part of the file table could not be read",
     "Files described by the unreadable area may be missing or appear in "
-    "'Lost files'. A Deep Scan can find more.",
+    "'Lost files'. A Deep scan can find more.",
 )
 E_BITLOCKER = _register(
     "LB-205",
     "BitLocker-encrypted volume",
+    "macOS can't unlock BitLocker. Connect the drive to a Windows PC, unlock it there with its password or "
+    "recovery key, and run Lifeboat on that PC with its drive letter as the source."
+    if sys.platform == "darwin" else
     "Unlock the volume in Windows with its password or recovery key, then "
     "select its drive letter in Lifeboat's source list to read decrypted data.",
 )
@@ -133,7 +140,7 @@ E_DEST_GONE = _register(
 E_DEST_FAT32 = _register(
     "LB-305",
     "File too large for a FAT32 destination",
-    "FAT32 cannot store files of 4 GB or more. Use an NTFS or exFAT destination.",
+    f"FAT32 cannot store files of 4 GB or more. Use an {BIG_FILE_FORMATS} destination.",
 )
 E_DEST_WRITE = _register(
     "LB-306",

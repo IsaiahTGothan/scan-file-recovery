@@ -7,8 +7,8 @@ import uuid
 from dataclasses import dataclass, field
 
 from ..device.base import DeviceInfo
-from ..errors import E_DEST_FAT32, E_DEST_NOT_WRITABLE, E_DEST_ON_SOURCE, E_DEST_SPACE
-from ..util import format_size
+from ..errors import BIG_FILE_FORMATS, E_DEST_FAT32, E_DEST_NOT_WRITABLE, E_DEST_ON_SOURCE, E_DEST_SPACE
+from ..util import format_size, plural
 from .destination import (
     disks_for_path,
     disks_for_source,
@@ -122,7 +122,7 @@ def check_destination(destination: str, source: DeviceInfo, needed: int, largest
         report.issues.append(PreflightIssue(
             E_DEST_FAT32,
             f"The destination uses FAT32, which cannot store files of 4 GB or larger. "
-            f"{files_over_4g} selected file(s) would be skipped. Use an NTFS or exFAT drive instead.",
+            f"{plural(files_over_4g, 'selected file')} would be skipped. Use an {BIG_FILE_FORMATS} drive instead.",
             False,
         ))
     return report

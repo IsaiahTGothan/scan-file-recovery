@@ -33,7 +33,7 @@ from ..fs.carving import GROUPS
 from ..imaging import check_image_destination, inspect_existing_image
 from ..logsetup import log_dir
 from ..recover import PreflightReport, RecoverySummary, Status, check_destination, find_resumable
-from ..util import format_duration, format_size
+from ..util import format_duration, format_size, plural
 from . import icons
 from .theme import current
 from .widgets import Donut, ScrollBody, StatCard, keep_text_whole
@@ -221,11 +221,11 @@ class RecoverDialog(QDialog):
         self.resume_info: tuple[dict, int] | None = None
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
-        head = QLabel(f"Recover {count:,} file{'s' if count != 1 else ''} ({format_size(size)})")
+        head = QLabel(f"Recover {plural(count, 'file')} ({format_size(size)})")
         head.setObjectName("BigTitle")
         layout.addWidget(head)
         if hidden:
-            note = QLabel(f"Includes {hidden:,} ticked file(s) not shown by the current filter.")
+            note = QLabel(f"Includes {plural(hidden, 'ticked file')} not shown by the current filter.")
             note.setProperty("muted", True)
             layout.addWidget(note)
         dest_box = QFrame()
@@ -338,8 +338,9 @@ class RecoverDialog(QDialog):
         self.resume_info = resumable
         self.resume.setVisible(resumable is not None)
         if resumable is not None:
-            self.resume.setText(f"Resume the unfinished recovery in this folder ({resumable[1]:,} files already "
-                                "recovered will be skipped)")
+            done = plural(resumable[1], "file")
+            self.resume.setText(f"Resume the unfinished recovery in this folder ({done} already recovered will "
+                                "be skipped)")
             if not self.resume.isChecked():
                 self.resume.blockSignals(True)
                 self.resume.setChecked(True)
@@ -410,7 +411,7 @@ class ImageDialog(QDialog):
         head.setObjectName("BigTitle")
         layout.addWidget(head)
         text = QLabel(
-            "Copies the whole drive, sector by sector, to an image file on a healthy drive - the safest thing to do "
+            "Copies the whole drive, sector by sector, to an image file on a healthy drive: the safest thing to do "
             "with a drive that is failing. The healthy areas are copied first; damaged areas are retried at the end. "
             "You can stop at any time and continue later. Afterwards, open the image in Lifeboat to recover files "
             "without touching the failing drive again.")
@@ -743,7 +744,7 @@ class AboutDialog(QDialog):
         updates = QPushButton("Check for updates")
         icons.put(updates, "refresh")
         updates.setEnabled(False)
-        updates.setToolTip("Coming soon: Lifeboat will check zays.us for new versions.")
+        updates.setToolTip("Coming soon: Lifeboat will check zays.us for new versions")
         close = _primary(QPushButton("Close"))
         close.clicked.connect(self.accept)
         for button in (notices, logs, updates):
@@ -924,12 +925,13 @@ class SummaryDialog(QDialog):
             rest_card.setObjectName("Card")
             row = QHBoxLayout(rest_card)
             row.setContentsMargins(14, 10, 10, 10)
-            text = QLabel(f"<b>{rest_count:,} files not recovered yet</b> ({format_size(rest_size)}): not ticked "
-                          "because they didn't fit, or stopped, skipped or failed. Recover them now, for example "
-                          "to another drive.")
+            it, them = ("it", "it") if rest_count == 1 else ("they", "them")
+            text = QLabel(f"<b>{plural(rest_count, 'file')} not recovered yet</b> ({format_size(rest_size)}): not "
+                          f"ticked because {it} didn't fit, or stopped, skipped or failed. Recover {them} now, for "
+                          "example to another drive.")
             text.setWordWrap(True)
             more = _primary(QPushButton(icons.icon("recover", "#ffffff"), "Recover the rest\u2026"))
-            more.setToolTip("Ticks exactly those files and opens the Recover window")
+            more.setToolTip("Ticks exactly what is left and opens the Recover window")
             more.clicked.connect(self._recover_rest)
             row.addWidget(text, 1)
             row.addWidget(more)

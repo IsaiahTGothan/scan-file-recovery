@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from .. import __version__
 from ..branding import APP_FULL_NAME, APP_ID, SETTINGS_ORG
 from ..logsetup import setup_logging
+from ..util import plural
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QWidget
@@ -181,7 +182,7 @@ def _exercise_dialogs(window: QWidget) -> None:
         dialog.show()
         dialog.close()
         dialog.deleteLater()
-    log.info("Smoke test opened and closed %d dialogs", len(dialogs))
+    log.info("Smoke test opened and closed %s", plural(len(dialogs), "dialog"))
 
 
 def _dispose(window: QWidget) -> None:

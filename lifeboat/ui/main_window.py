@@ -60,7 +60,7 @@ from ..recover.destination import free_space
 from ..rescue.reader import ReadMode, ReadPolicy, RescueReader
 from ..rescue.sectormap import SectorMap, State
 from ..scan import Scanner, ScanOptions, ScanResult
-from ..util import format_duration, format_rate, format_size, widest_clock
+from ..util import format_duration, format_rate, format_size, plural, widest_clock
 from . import icons, ticking
 from .bridge import Bridge, Job, PendingDecision, connect_events
 from .dialogs import (
@@ -115,6 +115,7 @@ from .widgets import (
     clearable,
     device_icon_name,
     device_subtitle,
+    key_text,
     pill,
     toast_level,
 )
@@ -266,10 +267,12 @@ class MainWindow(QMainWindow):
         self.plan_badge.setToolTip(f"{status.name}: {status.detail}")
         layout.addWidget(self.plan_badge, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addSpacing(14)
-        self.btn_scan = _tool("Scan", "search", "Read the partitions and file tables of the selected source (Ctrl+R)")
+        self.btn_scan = _tool("Scan", "search",
+                              f"Read the partitions and file tables of the selected source ({key_text('Ctrl+R')})")
         self.btn_deep = _tool("Deep scan", "radar", "Read the whole drive to find lost partitions and files")
         self.btn_image = _tool("Create image", "clone", "Copy the whole drive to an image file first (safest)")
-        self.btn_open = _tool("Open image", "image", "Open a disk image file (.img, .dd, .001, .vhd)")
+        self.btn_open = _tool("Open image", "image",
+                              f"Open a disk image file (.img, .dd, .001, .vhd) ({key_text('Ctrl+O')})")
         for b in (self.btn_scan, self.btn_deep, self.btn_image, self.btn_open):
             layout.addWidget(b)
         layout.addStretch(1)
@@ -285,7 +288,7 @@ class MainWindow(QMainWindow):
         icons.put(self.btn_recover, "recover", "white")
         self.btn_recover.setProperty("primary", True)
         self.btn_recover.setMinimumHeight(36)
-        self.btn_recover.setToolTip("Copy the ticked files to another drive (Ctrl+S)")
+        self.btn_recover.setToolTip(f"Copy the ticked files to another drive ({key_text('Ctrl+S')})")
         layout.addWidget(self.btn_recover)
         layout.addSpacing(8)
         self.brand: QLabel | None = None
@@ -297,7 +300,7 @@ class MainWindow(QMainWindow):
             layout.addWidget(self.brand)
             layout.addSpacing(8)
         self.header_bar = bar
-        self.btn_settings = _tool("", "settings", "Settings (Ctrl+,)")
+        self.btn_settings = _tool("", "settings", f"Settings ({key_text('Ctrl+,')})")
         self.btn_help = _tool("", "help", "Help: what's new, shortcuts, plans, about")
         self.btn_help.setObjectName("HelpButton")
         self.btn_help.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -322,7 +325,7 @@ class MainWindow(QMainWindow):
         head.addWidget(self.btn_check)
         self.btn_refresh = QToolButton()
         icons.put(self.btn_refresh, "refresh")
-        self.btn_refresh.setToolTip("Look for drives again (F5)")
+        self.btn_refresh.setToolTip(f"Look for drives again ({key_text('F5')})")
         head.addWidget(self.btn_refresh)
         layout.addLayout(head)
         self.sources = SourceList()
@@ -589,7 +592,8 @@ class MainWindow(QMainWindow):
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search names (e.g. *.jpg, invoice) and press Enter")
         glass = self.search.addAction(icons.icon("search", current().muted), QLineEdit.ActionPosition.LeadingPosition)
-        glass.setToolTip("Search file names in the whole scan: type, then press Enter")
+        glass.setToolTip(f"Search file names in the whole scan ({key_text('Ctrl+F')}): type, then press "
+                         f"{key_text('Enter')}")
         icons.put(glass, "search", "muted")
         clearable(self.search, "Clear the search")
         self.category = CategoryChips(["All files", *CATEGORIES.keys(), "Other"])
@@ -732,7 +736,7 @@ class MainWindow(QMainWindow):
                                       ("keyboard", "Keyboard shortcuts", self._show_shortcuts),
                                       ("star", "Plans and pricing", self._plans_clicked),
                                       (None, "", None),
-                                      ("open", "Open the log folder", self._open_logs),
+                                      ("open", "Open log folder", self._open_logs),
                                       ("globe", "Visit zays.us", self._visit_site),
                                       (None, "", None),
                                       ("info", f"About {APP_NAME}", self._show_about)):
@@ -1364,11 +1368,12 @@ class MainWindow(QMainWindow):
         self.category.set_counts(self._category_counts(result.root))
         vols = [v for v in result.volumes if v.volume is not None]
         locked = self._locked_volumes(result)
-        lock_note = (f" {len(locked)} encrypted volume{'s are' if len(locked) != 1 else ' is'} locked: select it and "
-                     "click Unlock." if locked else "")
+        one = len(locked) == 1
+        lock_note = (f" {plural(len(locked), 'encrypted volume')} {'is' if one else 'are'} locked: select "
+                     f"{'it' if one else 'one'} and click Unlock." if locked else "")
         self.found_label.setText(
-            f"{files:,} files found ({deleted:,} deleted or found by signature), {format_size(size)} in "
-            f"{len(vols)} volume(s).{lock_note}")
+            f"{plural(files, 'file')} found ({deleted:,} deleted or found by signature), {format_size(size)} in "
+            f"{plural(len(vols), 'volume')}.{lock_note}")
         target = focus or (locked[0] if locked else None)
         index = self.folder_model.index_of(target) if target is not None else QModelIndex()
         if not index.isValid() and self.folder_model.rowCount() > 0:
@@ -1426,7 +1431,7 @@ class MainWindow(QMainWindow):
         if password not in self.passwords:
             self.passwords.append(password)   # a later scan of this drive unlocks it by itself
         files = sum(1 for n in holder.walk() if n.children is None)
-        self._notify("success", "Volume unlocked", f"\u201c{name}\u201d: {files:,} files.")
+        self._notify("success", "Volume unlocked", f"\u201c{name}\u201d: {plural(files, 'file')}.")
 
     def _retry_unlock(self) -> None:
         node, self._unlock_retry = self._unlock_retry, None
@@ -1483,7 +1488,7 @@ class MainWindow(QMainWindow):
             job.engine = engine
             return engine.run()
 
-        if self._start("recover", f"Recovering {len(files):,} files…", work):
+        if self._start("recover", f"Recovering {plural(len(files), 'file')}…", work):
             self.btn_finish.setVisible(True)
             self.btn_finish.setEnabled(True)
 
@@ -1553,9 +1558,9 @@ class MainWindow(QMainWindow):
             self.job_panel.update_progress(p, self.job.control.paused)
         details = []
         if p.items_total:
-            details.append(f"{p.items_done:,}/{p.items_total:,} files")
+            details.append(f"{p.items_done:,} of {plural(p.items_total, 'file')}")
         if p.total and p.done:
-            details.append(f"{format_size(p.done)} of {format_size(p.total)}")
+            details.append(p.amount())
         if p.rate:
             details.append(format_rate(p.rate))
         if p.eta is not None and p.eta > 0:
@@ -1580,7 +1585,7 @@ class MainWindow(QMainWindow):
             assert isinstance(result, ScanResult)
             self._show_result(result)
             files, deleted, _size = result.counts()
-            self._notify("success", "Scan finished", f"{files:,} files found, {deleted:,} of them deleted.")
+            self._notify("success", "Scan finished", f"{plural(files, 'file')} found ({deleted:,} deleted).")
         elif kind == "unlock":
             assert isinstance(result, tuple)
             self._unlock_done(*result)
@@ -1815,7 +1820,7 @@ class MainWindow(QMainWindow):
             matches = [n for n in self.result.root.walk() if n.children is None and flt.match(n)]
             self.list_model.set_results(matches[:200000])
             more = " (showing the first 200,000)" if len(matches) > 200000 else ""
-            self.crumb.setText(f"Search results: {len(matches):,} files{more}")
+            self.crumb.setText(f"Search results: {plural(len(matches), 'file')}{more}")
         else:
             self.list_model.set_folder(current_folder)
             if current_folder is not None:
@@ -1999,7 +2004,7 @@ class MainWindow(QMainWindow):
         files = ticking.not_recovered(self._shown_files(), self.list_model.results)
         self.selection.apply_ticks(tick=files, only=True)
         self.toasts.show("success" if files else "info", "Ticked the files not recovered yet",
-                         f"{len(files):,} files, {format_size(sum(n.size for n in files))}.")
+                         f"{plural(len(files), 'file')}, {format_size(sum(n.size for n in files))}.")
 
     def _untick_recovered(self) -> None:
         shown = self._shown_files()
@@ -2024,12 +2029,12 @@ class MainWindow(QMainWindow):
 
         def work(job: Job) -> tuple[dict[int, int], bool]:
             def report(done: int, total: int) -> None:
-                job.report(Progress("Finding where the files are on the drive", done, total,
-                                    items_done=done, items_total=total))
+                job.report(Progress("Finding where the files are on the drive", done, total, unit="file"))
 
             return ticking.positions_for(missing, job.control.check, report)
 
-        self._start("order", f"Finding where {len(missing):,} files are on the drive\u2026", work)
+        self._start("order", f"Finding where {plural(len(missing), 'file')} "
+                             f"{'is' if len(missing) == 1 else 'are'} on the drive\u2026", work)
 
     def _finish_tick(self) -> None:
         pending, self._pending_tick = self._pending_tick, None
@@ -2042,17 +2047,19 @@ class MainWindow(QMainWindow):
             which = cast(int, arg)
             part = ticking.halves(ordered)[which]
             title = f"Ticked the {'first' if which == 0 else 'second'} half"
-            detail = f"{len(part):,} of {len(files):,} files."
+            detail = f"{len(part):,} of {plural(len(files), 'file')}."
         elif action == "size":
             part = ticking.fill(ordered, cast(int, arg), cost=lambda n: n.size)
-            detail = f"{len(part):,} of {len(files):,} files, in disk order."
+            detail = f"{len(part):,} of {plural(len(files), 'file')}, in disk order."
         else:  # "fit"
             budget, where = cast(tuple[int, str], arg)
             part = ticking.fill(ordered, budget)
             title = "Ticked what fits"
             left = len(files) - len(part)
-            detail = (f"{len(part):,} files fit in the {format_size(budget)} usable on {where}."
-                      + (f" {left:,} files are left for another drive." if left else " All of them fit."))
+            fits = "fits" if len(part) == 1 else "fit"
+            detail = (f"{plural(len(part), 'file')} {fits} in the {format_size(budget)} usable on {where}."
+                      + (f" {plural(left, 'file')} {'is' if left == 1 else 'are'} left for another drive."
+                         if left else " All of them fit." if len(part) > 1 else ""))
         self.selection.apply_ticks(tick=part, only=True)
         self._remaining = list(files)  # after the recovery, the summary offers what's left of these
         self.toasts.show("success" if part else "warning", title,
@@ -2070,8 +2077,8 @@ class MainWindow(QMainWindow):
         sel = self.selection
         if sel.count:
             hidden = f" ({sel.hidden_selected:,} not shown)" if sel.hidden_selected else ""
-            self._recover_texts = (f"Recover {sel.count:,} files · {format_size(sel.bytes)}{hidden}",
-                                   f"Recover {sel.count:,} files")
+            self._recover_texts = (f"Recover {plural(sel.count, 'file')} · {format_size(sel.bytes)}{hidden}",
+                                   f"Recover {plural(sel.count, 'file')}")
         else:
             self._recover_texts = ("Recover", "Recover")
         self._fit_header()

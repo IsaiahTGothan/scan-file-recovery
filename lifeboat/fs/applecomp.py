@@ -19,6 +19,8 @@ import struct
 import zlib
 from dataclasses import dataclass
 
+from ..util import plural
+
 CHUNK = 0x10000                     # uncompressed bytes per piece in the resource fork
 
 
@@ -135,7 +137,7 @@ def decompress_chunk(method: str, data: bytes, size: int) -> bytes:
     else:
         raise CompressionError(f"unknown method {method}")
     if len(out) != size:
-        raise CompressionError(f"expected {size:,} bytes, got {len(out):,}")
+        raise CompressionError(f"expected {plural(size, 'byte')}, got {len(out):,}")
     return bytes(out)
 
 

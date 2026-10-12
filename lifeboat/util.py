@@ -26,7 +26,7 @@ def format_size(num_bytes: int | float, *, exact: bool = False) -> str:
     n = float(num_bytes)
     if n < base:
         whole = int(n)
-        return f"{whole} byte" if whole == 1 else f"{whole} bytes"
+        return plural(whole, "byte")
     units = ("KB", "MB", "GB", "TB", "PB", "EB")
     value = n
     unit = "bytes"
@@ -41,8 +41,13 @@ def format_size(num_bytes: int | float, *, exact: bool = False) -> str:
     else:
         text = f"{value:.2f} {unit}"
     if exact:
-        text += f" ({int(num_bytes):,} bytes)"
+        text += f" ({plural(int(num_bytes), 'byte')})"
     return text
+
+
+def plural(count: int, noun: str, nouns: str = "") -> str:
+    """``count`` and its noun, singular or plural: "1 file", "2,048 files", "1 copy", "3 copies"."""
+    return f"{count:,} {noun if count == 1 else nouns or noun + 's'}"
 
 
 def format_capacity(num_bytes: int) -> str:
@@ -52,7 +57,7 @@ def format_capacity(num_bytes: int) -> str:
         if n >= factor:
             value = n / factor
             return f"{value:.0f} {unit}" if value >= 100 else f"{value:.1f} {unit}"
-    return f"{int(n)} bytes"
+    return plural(int(n), "byte")
 
 
 def format_rate(bytes_per_second: float) -> str:

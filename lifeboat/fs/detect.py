@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
 from ..events import EventBus, JobControl
@@ -24,15 +25,17 @@ class Probe:
 
 
 UNSUPPORTED_NOTES = {
-    "BitLocker": "BitLocker-encrypted. Unlock it in Windows, then choose its drive letter as the source.",
-    "ReFS": "ReFS is not supported. Use Deep Scan to recover files by signature.",
-    "APFS": "The APFS container is damaged beyond what Lifeboat can read. Use Deep Scan to recover files by "
+    "BitLocker": ("BitLocker-encrypted, which macOS can't unlock. Unlock it on a Windows PC and run Lifeboat "
+                  "there, with its drive letter as the source." if sys.platform == "darwin" else
+                  "BitLocker-encrypted. Unlock it in Windows, then choose its drive letter as the source."),
+    "ReFS": "ReFS is not supported. Use Deep scan to recover files by signature.",
+    "APFS": "The APFS container is damaged beyond what Lifeboat can read. Use Deep scan to recover files by "
             "signature.",
-    "HFS+": "The HFS+ volume header and its backup copy are both damaged. Use Deep Scan to recover files by "
+    "HFS+": "The HFS+ volume header and its backup copy are both damaged. Use Deep scan to recover files by "
             "signature.",
     "Core Storage": "Mac Core Storage volume (FileVault 2 or Fusion Drive on macOS 10.7-10.12); unlock it on a Mac, "
-                    "or use Deep Scan to recover files by signature.",
-    "ext": "Linux ext2/3/4 is not supported. Use Deep Scan to recover files by signature.",
+                    "or use Deep scan to recover files by signature.",
+    "ext": "Linux ext2/3/4 is not supported. Use Deep scan to recover files by signature.",
     "LUKS": "Linux encrypted (LUKS) volume; it cannot be read without unlocking it.",
     "swap": "Linux swap space (contains no files).",
 }
