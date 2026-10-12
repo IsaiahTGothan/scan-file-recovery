@@ -876,6 +876,35 @@ def test_job_panel_shows_progress(app):
     assert panel.isHidden()
 
 
+def test_search_says_when_nothing_matches_and_clearing_it_goes_back(app, disks):
+    """A search with no match says so in the list; clearing it shows the folder from before again
+    (the list used to stay empty until another folder was clicked)."""
+    if "hfsplus" not in disks:
+        pytest.skip("test disk not made yet")
+    import lifeboat.ui.main_window as mw
+
+    window = mw.MainWindow()
+    path = str(disks["hfsplus"][0])
+    info = DeviceInfo(path=path, kind="image", size=os.path.getsize(path), model="Disk image")
+    window.images.append(info)
+    window.sources.set_devices(window.devices + window.images, info.identity)
+    window.select_source(info)
+    window.quick_scan()
+    _wait(app, window)
+    folder = window.list_model.folder
+    shown = window.list_model.rowCount()
+    assert folder is not None and shown > 0 and window.list.empty_hint() == ""
+    window.search.setText("vacation 2019")
+    window._apply_filter()
+    assert window.list_model.rowCount() == 0
+    assert window.list.empty_hint().startswith("No file names match “vacation 2019”")
+    window.search.clear()                      # the box's clear button does the same
+    _pump(app, 0.1)
+    assert window.list_model.folder is folder and window.list_model.rowCount() == shown
+    assert window.crumb.text() == window._crumb_text(folder)
+    window.close()
+
+
 def test_keyboard_focus_is_ringed(app):
     """Tab rings the button it moves to; a click doesn't (as Windows and macOS do)."""
     from PySide6.QtTest import QTest

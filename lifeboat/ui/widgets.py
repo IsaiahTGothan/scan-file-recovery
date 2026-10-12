@@ -6,7 +6,7 @@ import html
 import math
 import time
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from PySide6.QtCore import (
     QEvent,
@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
     QTextBrowser,
     QToolButton,
     QToolTip,
+    QTreeView,
     QVBoxLayout,
     QWidget,
 )
@@ -1268,6 +1269,31 @@ class FlowLayout(QLayout):
                     item.setGeometry(QRect(QPoint(left, y + (height - hint.height()) // 2), hint))
             y += height + (self._spacing if number < len(lines) - 1 else 0)
         return y - rect.y() + margins.bottom()
+
+
+class HintTreeView(QTreeView):
+    """A list that says why it's empty (nothing matches the search or the filters, an empty folder)
+    instead of showing nothing. ``hint`` gives the words."""
+
+    def __init__(self, hint: Callable[[], str]) -> None:
+        super().__init__()
+        self.hint = hint
+
+    def empty_hint(self) -> str:
+        model = self.model()
+        if model is None or model.rowCount(self.rootIndex()) > 0:
+            return ""
+        return self.hint()
+
+    def paintEvent(self, event: QEvent) -> None:
+        super().paintEvent(event)  # type: ignore[arg-type]
+        text = self.empty_hint()
+        if text:
+            painter = QPainter(self.viewport())
+            painter.setPen(QColor(current().muted))
+            area = self.viewport().rect().adjusted(16, 24, -16, -16)
+            centred = Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop
+            painter.drawText(area, centred.value | Qt.TextFlag.TextWordWrap.value, text)
 
 
 class PaddedDelegate(QStyledItemDelegate):

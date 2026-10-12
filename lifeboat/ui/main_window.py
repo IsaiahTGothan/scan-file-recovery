@@ -100,6 +100,7 @@ from .widgets import (
     ElidedLabel,
     FittedBrowser,
     FlowLayout,
+    HintTreeView,
     JobPanel,
     MapLegend,
     PaddedDelegate,
@@ -633,7 +634,7 @@ class MainWindow(QMainWindow):
         self.crumb.setProperty("muted", True)
         m_layout.addWidget(self.crumb)
         self.list_model = FileListModel(self.selection)
-        self.list = QTreeView()
+        self.list = HintTreeView(self._list_empty_hint)
         self.list.setModel(self.list_model)
         self.list.setRootIsDecorated(False)
         self.list.setUniformRowHeights(True)
@@ -1803,7 +1804,8 @@ class MainWindow(QMainWindow):
             show_system=bool(pref("show_system")),
             show_streams=bool(pref("show_system")),
         )
-        current_folder = self.list_model.folder
+        # Leaving a search: back to the folder shown before it (the list used to show nothing).
+        current_folder = self.list_model.folder or self.list_model.before_search
         self.selection.set_filter(flt)
         self.folder_model.refilter()
         if flt.text and self.result is not None:
@@ -1821,6 +1823,25 @@ class MainWindow(QMainWindow):
     def _search_edited(self, text: str) -> None:
         if not text:
             self._apply_filter()
+
+    def _list_empty_hint(self) -> str:
+        """Why the file list is empty."""
+        if self.result is None:
+            return ""
+        flt = self.selection.filter
+        filtered = flt.category != "All files" or flt.status != "all"
+        if self.list_model.search_mode:
+            where = " with the filters above" if filtered else ""
+            return f"No file names match “{flt.text}”{where}. Try part of the name, or * as a wildcard (*.jpg)."
+        folder = self.list_model.folder
+        if folder is None:
+            return "Select a folder on the left to see its files."
+        if not folder.children:
+            return "This folder is empty."
+        if filtered:
+            return "Nothing in this folder matches the filters above. Choose All files and Existing and deleted to " \
+                   "see everything."
+        return "Only system files are in this folder. To see them: Settings > Scanning > Show system files."
 
     def _crumb_text(self, node: Node | None) -> str:
         if node is None:

@@ -481,6 +481,7 @@ class FileListModel(QAbstractTableModel):
         super().__init__()
         self.selection = selection
         self.folder: Node | None = None
+        self.before_search: Node | None = None     # the folder shown before the search results
         self.rows: list[Node] = []
         self.search_mode = False
         self.results: dict[int, ResultInfo] = {}
@@ -496,6 +497,8 @@ class FileListModel(QAbstractTableModel):
 
     def set_results(self, nodes: list[Node]) -> None:
         self.beginResetModel()
+        if not self.search_mode:
+            self.before_search = self.folder
         self.folder = None
         self.search_mode = True
         self.rows = nodes
