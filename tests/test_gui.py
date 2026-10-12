@@ -289,6 +289,25 @@ def test_empty_tables_say_why(app, monkeypatch):
     window.close()
 
 
+def test_a_greyed_out_button_says_why(app):
+    """A disabled button's tooltip says what it waits for, and goes back to normal once enabled."""
+    from lifeboat.ui.main_window import MainWindow
+
+    window = MainWindow()
+    window.show()
+    _pump(app)
+    recover = window.btn_recover
+    assert not recover.isEnabled()
+    assert recover.toolTip().startswith("Copy the ticked files to another drive")
+    assert recover.toolTip().endswith("Tick the files you want to recover first.")
+    if window.reader is None:
+        assert window.btn_scan.toolTip().endswith("Select a drive or disk image on the left first.")
+        assert window.ov_scan.toolTip() == "Select a drive or disk image on the left first."
+    window._enable(recover, True, "Tick the files you want to recover first.")
+    assert "Tick" not in recover.toolTip() and recover.toolTip().startswith("Copy the ticked files")
+    window.close()
+
+
 def test_problem_bursts_are_summarised(app, monkeypatch):
     """Hundreds of errors in a burst give a few pop-ups, but every one reaches the Problems tab."""
     import lifeboat.ui.main_window as mw

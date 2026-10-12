@@ -12,6 +12,7 @@ from typing import cast
 from PySide6.QtCore import QModelIndex, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QColor, QFont, QFontMetrics, QKeySequence, QResizeEvent
 from PySide6.QtWidgets import (
+    QAbstractButton,
     QAbstractItemView,
     QApplication,
     QComboBox,
@@ -2127,15 +2128,31 @@ class MainWindow(QMainWindow):
         busy = self.job is not None
         has_source = self.reader is not None
         is_image = self.info is not None and self.info.kind == "image"
+        wait = "Wait for the current job to finish, or stop it."
+        pick = "Select a drive or disk image on the left first."
         for b in (self.btn_scan, self.ov_scan, self.btn_deep, self.ov_deep):
-            b.setEnabled(has_source and not busy)
+            self._enable(b, has_source and not busy, wait if busy else pick)
         for b in (self.btn_image, self.ov_image):
-            b.setEnabled(has_source and not busy and not is_image)
-        self.btn_open.setEnabled(not busy)
-        self.btn_recover.setEnabled(not busy and self.selection.count > 0)
+            self._enable(b, has_source and not busy and not is_image,
+                         wait if busy else pick if not has_source else "This source is a disk image already.")
+        self._enable(self.btn_open, not busy, wait)
+        self._enable(self.btn_recover, not busy and self.selection.count > 0,
+                     wait if busy else "Tick the files you want to recover first.")
         has_results = self.last_summary is not None
-        self.btn_open_dest.setEnabled(has_results)
-        self.btn_open_report.setEnabled(has_results and bool(self.last_summary and self.last_summary.report_html))
+        self._enable(self.btn_open_dest, has_results, "Available after a recovery.")
+        self._enable(self.btn_open_report, has_results and bool(self.last_summary and self.last_summary.report_html),
+                     "Available after a recovery." if not has_results else "This recovery has no report.")
+
+    @staticmethod
+    def _enable(button: QAbstractButton, on: bool, why_not: str) -> None:
+        """Enable ``button``, or disable it with its tooltip saying why: a greyed-out button that
+        says nothing looks broken."""
+        base = button.property("base_tip")
+        if base is None:
+            base = button.toolTip()
+            button.setProperty("base_tip", base)
+        button.setEnabled(on)
+        button.setToolTip(base if on else f"{base}\n{why_not}" if base else why_not)
 
     def _open_settings_clicked(self) -> None:
         self.open_settings()
