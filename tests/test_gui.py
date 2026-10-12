@@ -1205,3 +1205,43 @@ def test_header_fits_a_narrow_window(app):
     assert window.btn_plans.text() == "Upgrade" and not window.plan_badge.isHidden()
     assert window.btn_recover.text().startswith("Recover 8,508 files ·")
     window.close()
+
+
+def test_keyboard_shortcuts_page_tells_the_truth(app, disks, monkeypatch):
+    """Every key combination Settings > Keyboard shortcuts lists is one the window has, and Space
+    and Ctrl+F do what the page says."""
+    if "hfsplus" not in disks:
+        pytest.skip("test disk not made yet")
+    from PySide6.QtGui import QKeySequence
+    from PySide6.QtTest import QTest
+
+    import lifeboat.ui.main_window as mw
+    from lifeboat.ui.settings_dialog import SHORTCUTS
+
+    window = mw.MainWindow()
+    window.show()
+    _pump(app)
+    combos = {combo for combo, _what in SHORTCUTS if combo not in ("Enter", "Space", "Double-click")}
+    have = {action.shortcut().toString(QKeySequence.SequenceFormat.PortableText) for action in window.actions()}
+    assert combos <= have, combos - have
+    image = disks["hfsplus"][0]
+    info = DeviceInfo(path=str(image), kind="image", size=os.path.getsize(image), model="Disk image")
+    window.images.append(info)
+    window.sources.set_devices(window.devices + window.images, info.identity)
+    window.select_source(info)
+    window.quick_scan()
+    _wait(app, window)
+    model = window.list_model
+    rows = [model.index(r, 0) for r in range(model.rowCount())]
+    index = next(i for i in rows if model.node(i).name == "readme.txt")
+    window.list.setFocus()
+    window.list.setCurrentIndex(index)
+    QTest.keyClick(window.list, QtCore.Qt.Key.Key_Space)
+    assert model.node(index).check and window.selection.count == 1
+    QTest.keyClick(window, QtCore.Qt.Key.Key_F, QtCore.Qt.KeyboardModifier.ControlModifier)
+    assert window.search.hasFocus()
+    opened = []
+    monkeypatch.setattr(window, "open_settings", lambda page="": opened.append(page))
+    window._open_settings_clicked()
+    assert opened == [""]
+    window.close()

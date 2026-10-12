@@ -738,6 +738,7 @@ class AboutDialog(QDialog):
         close.clicked.connect(self.accept)
         for button in (notices, logs, updates):
             buttons.addWidget(button)
+        buttons.addWidget(pill("COMING SOON", "SoonPill"))       # like every feature not built yet
         buttons.addStretch(1)
         buttons.addWidget(close)
         layout.addLayout(buttons)
