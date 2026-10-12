@@ -33,6 +33,9 @@ def test_accent_text_is_readable(base, accent):
     # The accent as text (step numbers, badges) on every panel.
     for background in (theme.window, theme.panel, theme.panel_alt, theme.raised):
         assert contrast(theme.accent_ink, background) >= AA
+    # The banner that asks what to do (a drive disconnected): white text on red or amber.
+    assert contrast(theme.banner_bad, "#ffffff") >= AA
+    assert contrast(theme.banner_warn, "#ffffff") >= AA
 
 
 def test_contrast_matches_wcag():

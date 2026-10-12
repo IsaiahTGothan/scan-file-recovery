@@ -40,6 +40,8 @@ class Theme:
     accent_fill: str = ""
     accent_fill_hover: str = ""
     accent_ink: str = ""
+    banner_bad: str = ""               # the red and amber banners, dark enough for their white text
+    banner_warn: str = ""
 
 
 # Accent colour choices (Settings > Appearance): key -> (name, accent, hover, gradient end).
@@ -89,7 +91,9 @@ def readable(t: Theme) -> Theme:
     backgrounds = (t.window, t.panel, t.panel_alt, t.raised)
     away = "#ffffff" if t.name == "dark" else "#000000"
     return replace(t, accent_fill=fill, accent_fill_hover=_toward(fill, "#000000", (t.accent_text,), 5.6),
-                   accent_ink=_toward(t.accent, away, backgrounds, 4.6))
+                   accent_ink=_toward(t.accent, away, backgrounds, 4.6),
+                   banner_bad=_toward(t.bad, "#000000", ("#ffffff",), 4.6),
+                   banner_warn=_toward(t.warn, "#000000", ("#ffffff",), 4.6))
 
 
 def rgba(hex_value: str, alpha: float) -> str:
@@ -214,8 +218,8 @@ QMenu {{ background: {t.raised}; color: {t.text}; border: 1px solid {t.border}; 
 QMenu::item {{ padding: 6px 18px; border-radius: 6px; }}
 QMenu::item:selected {{ background: {t.selection}; }}
 #Banner {{ border-radius: 10px; }}
-#Banner[level="critical"] {{ background: {t.bad}; }}
-#Banner[level="warning"] {{ background: {t.warn}; }}
+#Banner[level="critical"] {{ background: {t.banner_bad}; }}
+#Banner[level="warning"] {{ background: {t.banner_warn}; }}
 #Banner QLabel {{ color: #ffffff; }}
 #Banner QPushButton {{ background: rgba(255,255,255,0.18); color: #ffffff; border: 1px solid rgba(255,255,255,0.45); }}
 #Banner QPushButton:hover {{ background: rgba(255,255,255,0.28); }}
