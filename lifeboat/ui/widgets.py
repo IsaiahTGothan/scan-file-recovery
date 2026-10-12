@@ -142,9 +142,10 @@ class SourceDelegate(QStyledItemDelegate):
             badge_width = painter.fontMetrics().horizontalAdvance(badge) + 12
             badge_rect = QRect(rect.right() - badge_width - 6, rect.top() + 8, badge_width, 16)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(t.bad if info.status == NOT_ANSWERING else t.border))
+            # White on the red that white text can be read on; the system badge in the text colour.
+            painter.setBrush(QColor(t.banner_bad if info.status == NOT_ANSWERING else t.border))
             painter.drawRoundedRect(badge_rect, 8, 8)
-            painter.setPen(QColor("#ffffff" if info.status == NOT_ANSWERING else t.muted))
+            painter.setPen(QColor("#ffffff" if info.status == NOT_ANSWERING else t.text))
             painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge)
             badge_width += 10
         title_font = QFont(option.font)
@@ -887,9 +888,15 @@ class PreviewPane(QFrame):
         image = QImage.fromData(data)
         if not image.isNull():
             pix = QPixmap.fromImage(image)
-            target = self.stack.size() - QSize(8, 8)
-            self.picture.setPixmap(pix.scaled(target, Qt.AspectRatioMode.KeepAspectRatio,
-                                              Qt.TransformationMode.SmoothTransformation))
+            room = self.stack.size() - QSize(8, 8)
+            if image.width() > room.width() or image.height() > room.height():
+                # Shrunk to fit, with the screen's own pixels (sharp on a Retina or 150 % screen).
+                # A smaller picture is shown at its size: blown up, it would only look blurry.
+                ratio = self.picture.devicePixelRatioF()
+                pix = pix.scaled(QSize(round(room.width() * ratio), round(room.height() * ratio)),
+                                 Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                pix.setDevicePixelRatio(ratio)
+            self.picture.setPixmap(pix)
             self.picture.setToolTip(note.strip() or f"{image.width()} × {image.height()} pixels")
             self.stack.setCurrentWidget(self.picture)
             return

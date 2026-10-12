@@ -38,6 +38,14 @@ def test_accent_text_is_readable(base, accent):
     assert contrast(theme.banner_warn, "#ffffff") >= AA
 
 
+@pytest.mark.parametrize("base", [DARK, LIGHT], ids=["dark", "light"])
+def test_drive_badges_are_readable(base):
+    """The small badges in the drive list: "CHECK" (white on red) and "SYSTEM DISK"."""
+    theme = readable(base)
+    assert contrast("#ffffff", theme.banner_bad) >= AA
+    assert contrast(theme.text, theme.border) >= AA
+
+
 def test_contrast_matches_wcag():
     assert contrast("#000000", "#ffffff") == pytest.approx(21.0)
     assert contrast("#777777", "#ffffff") == pytest.approx(4.48, abs=0.01)

@@ -268,12 +268,13 @@ def test_toast_closed_early_does_not_raise(app, monkeypatch):
     host.close()
 
 
-def test_empty_tables_say_why(app):
+def test_empty_tables_say_why(app, monkeypatch):
     """Before anything happens, the bottom tabs say what will appear there instead of showing bare
     headers, and the Problems tab has no empty explanation box beside its list."""
     import lifeboat.ui.main_window as mw
     from lifeboat.events import Event, Level
 
+    monkeypatch.setattr(mw, "is_admin", lambda: True)   # else "not running as administrator" is a problem
     window = mw.MainWindow()
     window.show()
     _pump(app)
@@ -1008,6 +1009,55 @@ def test_owner_logo_follows_the_theme(app):
     finally:
         theme.apply(app, "dark")
         icons.clear_cache()
+
+
+def test_pictures_are_sharp_on_high_dpi_screens(app, monkeypatch):
+    """On a Retina Mac or a 150 % Windows screen, icons and logos are drawn with the screen's own
+    pixels (not drawn small and blown up, which blurs them) at the same size on screen."""
+    from lifeboat.ui import icons
+
+    monkeypatch.setattr(icons, "screen_ratio", lambda: 2.0)
+    icons.clear_cache()
+    try:
+        for pixmap, points in ((icons.pixmap("lock", 44), 44), (icons.app_pixmap(34), 34)):
+            assert pixmap.devicePixelRatio() == 2.0
+            assert pixmap.width() == 2 * points
+            assert pixmap.deviceIndependentSize().width() == points
+    finally:
+        icons.clear_cache()
+
+
+def test_preview_never_blows_up_a_small_picture(app):
+    """A picture smaller than the preview is shown at its own size; a bigger one is shrunk to fit."""
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    from PySide6.QtGui import QImage
+
+    from lifeboat.fs.model import Node
+    from lifeboat.ui.widgets import PreviewPane
+
+    def png(width: int, height: int) -> bytes:
+        image = QImage(width, height, QImage.Format.Format_RGB32)
+        image.fill(0x3366CC)
+        data = QByteArray()
+        buffer = QBuffer(data)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, "PNG")
+        return bytes(data.data())
+
+    pane = PreviewPane()
+    pane.resize(360, 600)
+    pane.show()
+    _pump(app)
+    node = Node("photo.png", 0)
+    for (width, height), fits in (((40, 30), True), ((3000, 2000), False)):
+        pane.node = node
+        pane.show_content(node, png(width, height), True)
+        shown = pane.picture.pixmap().deviceIndependentSize()
+        if fits:
+            assert (shown.width(), shown.height()) == (width, height)
+        else:
+            assert shown.width() <= pane.stack.width() and shown.height() <= pane.stack.height()
+    pane.close()
 
 
 def test_the_banner_takes_the_job_panels_place(app):

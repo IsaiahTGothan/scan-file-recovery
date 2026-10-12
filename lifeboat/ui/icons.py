@@ -118,15 +118,25 @@ def _svg(name: str, color: str) -> bytes:
     return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">{body}</svg>'.encode()
 
 
-def _render(svg: bytes, size: int) -> QPixmap:
+def screen_ratio() -> float:
+    """Device pixels per point on the sharpest screen (2 on a Retina Mac, 1.5 at 150 % on Windows)."""
+    app = QGuiApplication.instance()
+    return max(1.0, app.devicePixelRatio()) if isinstance(app, QGuiApplication) else 1.0
+
+
+def _render(svg: bytes, size: int, ratio: float = 1.0) -> QPixmap:
+    """``size`` points square, drawn with ``ratio`` device pixels per point so it stays sharp."""
+    pixels = round(size * ratio)
     renderer = QSvgRenderer(QByteArray(svg))
-    image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    image = QImage(pixels, pixels, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    renderer.render(painter, QRectF(0, 0, size, size))
+    renderer.render(painter, QRectF(0, 0, pixels, pixels))
     painter.end()
-    return QPixmap.fromImage(image)
+    result = QPixmap.fromImage(image)
+    result.setDevicePixelRatio(ratio)
+    return result
 
 
 @lru_cache(maxsize=512)
@@ -147,7 +157,7 @@ def icon(name: str, color: str | None = None) -> QIcon:
 def pixmap(name: str, size: int, color: str | None = None) -> QPixmap:
     from .theme import current
 
-    return _render(_svg(name, color or current().text), size)
+    return _render(_svg(name, color or current().text), size, screen_ratio())
 
 
 @lru_cache(maxsize=4)
@@ -162,7 +172,7 @@ def app_icon() -> QIcon:
 
 
 def app_pixmap(size: int) -> QPixmap:
-    return _render(APP_ICON_SVG.encode(), size)
+    return _render(APP_ICON_SVG.encode(), size, screen_ratio())
 
 
 def _one_colour(image: QImage) -> bool:
@@ -192,8 +202,7 @@ def owner_pixmap(height: int, color: str | None = None) -> QPixmap | None:
     image = QImage(str(path)) if path is not None else QImage()
     if image.isNull():
         return None
-    app = QGuiApplication.instance()
-    ratio = max(1.0, app.devicePixelRatio()) if isinstance(app, QGuiApplication) else 1.0
+    ratio = screen_ratio()
     image = image.scaledToHeight(round(height * ratio), Qt.TransformationMode.SmoothTransformation)
     image = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
     if _one_colour(image):

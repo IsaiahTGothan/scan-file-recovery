@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -683,6 +684,7 @@ class AboutDialog(QDialog):
         texts.setSpacing(3)
         name = QLabel(APP_FULL_NAME)
         name.setObjectName("BigTitle")
+        name.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)  # the texts take the room
         version = QLabel(f"Version {build_info()}")
         version.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         version.setProperty("muted", True)
@@ -738,7 +740,7 @@ class AboutDialog(QDialog):
         notices = QPushButton("Licenses")
         icons.put(notices, "doc")
         notices.clicked.connect(self._licenses)
-        logs = QPushButton("Log folder")
+        logs = QPushButton("Open log folder")
         icons.put(logs, "open")
         logs.clicked.connect(self._open_logs)
         updates = QPushButton("Check for updates")

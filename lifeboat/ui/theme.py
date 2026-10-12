@@ -120,7 +120,7 @@ LIGHT = Theme(
     map_failed="#f08a24", map_bad="#d93036",
 )
 
-_current = DARK
+_current = readable(DARK)   # every colour set, even before apply() runs
 
 
 def current() -> Theme:

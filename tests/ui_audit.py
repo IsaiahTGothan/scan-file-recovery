@@ -111,7 +111,14 @@ def problems(top: QWidget, roomy: bool = False) -> list[str]:
                 found.append(f"{_name(widget)}: needs {widget.sizeHint().height()}px high, has {widget.height()}px")
         elif isinstance(widget, QLabel):
             pixmap = widget.pixmap()
-            if (pixmap is not None and not pixmap.isNull()) or not widget.text().strip():
+            if pixmap is not None and not pixmap.isNull():
+                # A logo or icon in a label much wider than it, drawn at its left: a gap pushes
+                # the text beside it away.
+                shown = round(pixmap.deviceIndependentSize().width())
+                centred = widget.alignment() & (Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignRight)
+                if widget.width() > shown + 24 and not centred:
+                    found.append(f"{_name(widget)}: a {shown}px picture in a {widget.width()}px wide label")
+            elif not widget.text().strip():
                 pass
             elif widget.wordWrap():
                 need = widget.heightForWidth(widget.width())
