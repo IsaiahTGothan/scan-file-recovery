@@ -10,7 +10,14 @@ requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "ZAYS" }]
 # Pinned: the version that is tested and bundled into the installer. Update deliberately.
-dependencies = ["PySide6-Essentials==6.12.0", "cryptography==50.0.2"]
+dependencies = [
+    "PySide6-Essentials==6.12.0",
+    # AES for unlocking encrypted Mac volumes. 48.0.1 is the last release with a ready-made package
+    # (OpenSSL included) for Intel Macs: newer ones get compiled there against the system's OpenSSL,
+    # which clashes with Python's own in the packaged app.
+    "cryptography==50.0.2; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "cryptography==48.0.1; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+]
 dynamic = ["version"]
 
 [project.optional-dependencies]
