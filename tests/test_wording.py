@@ -43,7 +43,7 @@ def _strings() -> list[tuple[str, int, ast.AST, str]]:
                 if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
                     docstrings.add(id(first.value))
         in_fstring = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr) for part in node.values}
-        name = str(path.relative_to(SOURCE.parent))
+        name = path.relative_to(SOURCE.parent).as_posix()   # "lifeboat/ui/x.py" on Windows too
         for node in ast.walk(tree):
             if isinstance(node, ast.JoinedStr):
                 found.append((name, node.lineno, node, text))

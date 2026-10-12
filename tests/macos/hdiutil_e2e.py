@@ -55,6 +55,16 @@ def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return res
 
 
+def detach(disk: str) -> None:
+    """Detach, waiting out "Resource busy": right after files are written, macOS (Spotlight,
+    fseventsd) can hold the volume for a few seconds."""
+    for _attempt in range(8):
+        if run(["hdiutil", "detach", disk], check=False).returncode == 0:
+            return
+        time.sleep(2)
+    run(["hdiutil", "detach", "-force", disk])
+
+
 def attach(image: Path, mount: bool) -> tuple[str, str]:
     """Attach a disk image; return (whole disk, mount point or "")."""
     args = ["hdiutil", "attach", "-plist", str(image)]
@@ -98,7 +108,7 @@ def cmd_create() -> None:
         for rel in deleted:
             (Path(mount) / rel).unlink()
         os.sync()
-        run(["hdiutil", "detach", disk])
+        detach(disk)
         time.sleep(1)
         disk, _mount = attach(image, mount=False)
         state[name] = {"image": str(image), "disk": disk, "manifest": manifest,
