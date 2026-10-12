@@ -508,7 +508,7 @@ class DeepScanDialog(QDialog):
         layout.addWidget(head)
         hours = source.size / (100 * 1000 * 1000) / 3600 if source.size else 0
         text = QLabel(
-            "Reads the entire drive from start to end to find lost or deleted partitions and to recognise files by "
+            "Reads the entire drive from start to end to find lost or deleted partitions and to recognize files by "
             "their content when the filesystem is too damaged. "
             + (f"On a healthy drive this takes roughly {format_duration(hours * 3600)}; a failing drive takes longer."
                if hours else ""))
@@ -748,6 +748,59 @@ class AboutDialog(QDialog):
         dialog = LicensesDialog(self)
         dialog.exec()
         dialog.deleteLater()
+
+
+class WhatsNewDialog(QDialog):
+    """The highlights of this version (shown once after an update, and from Help)."""
+
+    def __init__(self, parent: QWidget | None) -> None:
+        super().__init__(parent)
+        from ..whatsnew import latest
+
+        version, notes = latest()
+        self.setWindowTitle("What's new")
+        self.setFixedWidth(660)
+        t = current()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 16)
+        layout.setSpacing(14)
+        head = QHBoxLayout()
+        head.setSpacing(14)
+        logo = QLabel()
+        logo.setPixmap(icons.app_pixmap(56))
+        head.addWidget(logo)
+        texts = QVBoxLayout()
+        texts.setSpacing(2)
+        title = QLabel(f"What's new in Lifeboat {version}")
+        title.setObjectName("BigTitle")
+        sub = QLabel(TAGLINE)
+        sub.setProperty("muted", True)
+        texts.addWidget(title)
+        texts.addWidget(sub)
+        head.addLayout(texts, 1)
+        layout.addLayout(head)
+        for icon_name, name, text in notes:
+            card = QFrame()
+            card.setObjectName("Card")
+            row = QHBoxLayout(card)
+            row.setContentsMargins(14, 12, 14, 12)
+            row.setSpacing(14)
+            glyph = QLabel()
+            glyph.setPixmap(icons.pixmap(icon_name, 28, t.accent))
+            row.addWidget(glyph, 0, Qt.AlignmentFlag.AlignTop)
+            words = QLabel(f"<b>{html.escape(name)}</b><br>{html.escape(text)}")
+            words.setWordWrap(True)
+            words.setTextFormat(Qt.TextFormat.RichText)
+            # The width is known (fixed dialog): give wrapped text the height it needs up front.
+            words.setMinimumHeight(words.heightForWidth(660 - 44 - 28 - 28 - 14) + 4)
+            row.addWidget(words, 1)
+            layout.addWidget(card)
+        close = _primary(QPushButton("Got it"))
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(close)
+        layout.addLayout(row)
 
 
 class LicensesDialog(QDialog):

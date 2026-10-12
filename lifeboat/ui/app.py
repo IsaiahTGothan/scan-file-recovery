@@ -103,6 +103,10 @@ def main(argv: list[str] | None = None) -> int:
     smoke = "--smoke-test" in args
     if not smoke and _ask_for_admin(app):
         return 0
+    from functools import partial
+
+    from PySide6.QtCore import QTimer
+
     from .main_window import MainWindow
 
     if smoke:
@@ -122,10 +126,6 @@ def main(argv: list[str] | None = None) -> int:
     if smoke:
         # Packaging check, part 2: build the whole window, open and close every dialog, run the
         # event loop briefly, quit - and exit cleanly (a crash on exit fails the check).
-        from functools import partial
-
-        from PySide6.QtCore import QTimer
-
         QTimer.singleShot(500, partial(_exercise_dialogs, window))
         QTimer.singleShot(2500, window.close)
         QTimer.singleShot(3000, app.quit)
@@ -134,9 +134,21 @@ def main(argv: list[str] | None = None) -> int:
         log.info("Smoke test finished (exit %s)", code)
         print("Lifeboat smoke test OK")
         return code
+    QTimer.singleShot(400, partial(_whats_new_once, window))
     code = app.exec()
     _dispose(window)
     return code
+
+
+def _whats_new_once(window: QWidget) -> None:
+    """After an update (not on a first install), show once what changed."""
+    from .dialogs import settings
+
+    store = settings()
+    seen = str(store.value("last_seen_version", "") or "")
+    store.setValue("last_seen_version", __version__)
+    if seen and seen != __version__:
+        window.show_whats_new()  # type: ignore[attr-defined]
 
 
 def _exercise_dialogs(window: QWidget) -> None:
@@ -151,6 +163,7 @@ def _exercise_dialogs(window: QWidget) -> None:
         RecoverDialog,
         SummaryDialog,
         UnlockDialog,
+        WhatsNewDialog,
     )
     from .drive_check import DriveCheckDialog
     from .plans_dialog import PlansDialog
@@ -162,7 +175,7 @@ def _exercise_dialogs(window: QWidget) -> None:
         SettingsDialog(window), AboutDialog(window), ErrorDialog(window, "Smoke test", "Not a real error."),
         SummaryDialog(window, RecoverySummary("", [], 0.0)), DriveCheckDialog(window),
         UnlockDialog(window, "Smoke test", "a hint", "Not a real error."), PlansDialog(window),
-        LicensesDialog(window), SettingsDialog(window, "Account & license"),
+        LicensesDialog(window), SettingsDialog(window, "Account & license"), WhatsNewDialog(window),
     ]
     for dialog in dialogs:
         dialog.show()

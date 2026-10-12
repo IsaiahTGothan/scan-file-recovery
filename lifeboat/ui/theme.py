@@ -240,6 +240,7 @@ QPushButton[upgrade="true"]:hover {{ background: {rgba(t.accent, 0.22)}; }}
   background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {rgba(t.accent, 0.20)}, stop:0.55 {t.panel},
   stop:1 {t.panel}); }}
 #LinkButton {{ background: transparent; border: none; color: {t.info}; padding: 2px 0; text-align: left; }}
+QToolButton#HelpButton::menu-indicator {{ image: none; width: 0; }}
 QScrollArea#Clear {{ background: transparent; border: none; }}
 QScrollArea#Clear > QWidget, #ClearInner {{ background: transparent; }}
 #Keycap {{ background: {t.panel_alt}; color: {t.text}; border: 1px solid {t.border};

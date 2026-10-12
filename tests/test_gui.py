@@ -1018,8 +1018,10 @@ def test_upgrade_and_trial_buttons_open_the_plans(app, monkeypatch):
     window.promo_plans.click()                       # answered with "Have a license key?"
     assert opened[0] == "" and "free trial of Pro" in opened[1]
     assert pages == ["Account & license"]
-    window.btn_help.click()                          # About > See plans
+    window._show_about()                             # Help > About > See plans
     assert len(opened) == 4
+    texts = [a.text() for a in window.btn_help.menu().actions() if a.text()]
+    assert texts[0] == "What's new" and "Plans and pricing" in texts and texts[-1].startswith("About")
     window.close()
 
 
@@ -1147,3 +1149,34 @@ def test_theme_change_redraws_the_icons(app):
         apply_appearance(app)
         icons.clear_cache()
     window.close()
+
+
+def test_whats_new_shows_once_after_an_update(app, monkeypatch):
+    """Not on a first install; once after an update; never twice for the same version."""
+    from lifeboat import __version__
+    from lifeboat.ui import app as app_module
+    from lifeboat.ui.dialogs import WhatsNewDialog, settings
+    from lifeboat.whatsnew import latest
+
+    class Window:
+        shown = 0
+
+        def show_whats_new(self):
+            self.shown += 1
+
+    window = Window()
+    settings().remove("last_seen_version")
+    try:
+        app_module._whats_new_once(window)             # first install: nothing
+        assert window.shown == 0 and settings().value("last_seen_version") == __version__
+        settings().setValue("last_seen_version", "1.1.0")
+        app_module._whats_new_once(window)             # updated: shown
+        app_module._whats_new_once(window)             # same version again: not shown
+        assert window.shown == 1
+    finally:
+        settings().remove("last_seen_version")
+    dialog = WhatsNewDialog(None)
+    version, notes = latest()
+    labels = "".join(label.text() for label in dialog.findChildren(QtWidgets.QLabel))
+    assert f"What's new in Lifeboat {version}" in labels
+    assert len(notes) >= 3

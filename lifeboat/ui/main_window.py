@@ -283,8 +283,11 @@ class MainWindow(QMainWindow):
                 brand.setPixmap(pix.scaledToHeight(30, Qt.TransformationMode.SmoothTransformation))
                 brand.setToolTip(f"{APP_FULL_NAME}, {CREDIT}")
                 layout.addWidget(brand)
-        self.btn_settings = _tool("", "settings", "Settings")
-        self.btn_help = _tool("", "help", "About Lifeboat")
+        self.btn_settings = _tool("", "settings", "Settings (Ctrl+,)")
+        self.btn_help = _tool("", "help", "Help: what's new, shortcuts, plans, about")
+        self.btn_help.setObjectName("HelpButton")
+        self.btn_help.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.btn_help.setMenu(self._help_menu())
         layout.addWidget(self.btn_settings)
         layout.addWidget(self.btn_help)
         return bar
@@ -699,6 +702,24 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(disk, icons.icon("grid"), "Disk map")
         return self.tabs
 
+    def _help_menu(self) -> QMenu:
+        menu = QMenu(self)
+        for icon_name, text, slot in (("sparkle", "What's new", self.show_whats_new),
+                                      ("keyboard", "Keyboard shortcuts", self._show_shortcuts),
+                                      ("star", "Plans and pricing", self._plans_clicked),
+                                      (None, "", None),
+                                      ("open", "Open the log folder", self._open_logs),
+                                      ("globe", "Visit zays.us", self._visit_site),
+                                      (None, "", None),
+                                      ("info", f"About {APP_NAME}", self._show_about)):
+            if icon_name is None:
+                menu.addSeparator()
+                continue
+            action = menu.addAction(text)
+            icons.put(action, icon_name)
+            action.triggered.connect(slot)
+        return menu
+
     def _tick_menu(self) -> QMenu:
         menu = QMenu(self)
         entries = [
@@ -812,7 +833,6 @@ class MainWindow(QMainWindow):
         self.promo_plans.clicked.connect(self._plans_clicked)
         self.promo_trial.clicked.connect(self._start_trial)
         self.btn_settings.clicked.connect(self._open_settings_clicked)
-        self.btn_help.clicked.connect(self._show_about)
         self.btn_pause.clicked.connect(self.toggle_pause)
         self.btn_stop.clicked.connect(self.stop_job)
         self.btn_finish.clicked.connect(self.finish_job)
@@ -862,6 +882,32 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
         if code == AboutDialog.PLANS:
             self.open_plans()
+
+    def show_whats_new(self) -> None:
+        from .dialogs import WhatsNewDialog
+
+        dialog = WhatsNewDialog(self)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _show_shortcuts(self) -> None:
+        self.open_settings("Keyboard shortcuts")
+
+    def _open_logs(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from ..logsetup import log_dir
+
+        QDesktopServices.openUrl(QUrl.fromLocalFile(log_dir()))
+
+    def _visit_site(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from ..branding import PUBLISHER_URL
+
+        QDesktopServices.openUrl(QUrl(PUBLISHER_URL))
 
     def _show_problems_tab(self) -> None:
         self.tabs.setCurrentIndex(1)

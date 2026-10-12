@@ -529,7 +529,7 @@ class RescueReader:
             )
             if self._reported == 25:
                 self.events.info(
-                    "Further read errors are summarised every 10 seconds; the Disk map shows them all."
+                    "Further read errors are summarized every 10 seconds; the Disk map shows them all."
                 )
         else:
             self._suppressed += 1
