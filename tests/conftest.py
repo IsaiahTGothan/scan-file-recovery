@@ -18,6 +18,17 @@ IMAGES = Path(os.environ.get("LIFEBOAT_TEST_IMAGES", ROOT / ".images"))
 APPLE = ROOT / "fixtures" / "apple"      # disks made by macOS (tests/macos/make_fixtures.py)
 
 
+@pytest.fixture(autouse=True)
+def _default_formats():
+    """Sizes in 1,024-byte KB and year-month-day dates after every test: the app's settings can
+    change both (and on a Mac, "match this computer" means 1,000-byte KB)."""
+    yield
+    from lifeboat.util import set_size_units, set_time_style
+
+    set_size_units(False)
+    set_time_style("ymd")
+
+
 @pytest.fixture(scope="session")
 def images() -> dict:
     """Build (once) and return the index of reference filesystem images."""

@@ -271,11 +271,15 @@ def test_problem_bursts_are_summarised(app, monkeypatch):
     _pump(app)
     before = window.problems_model.rowCount()
     toasts.clear()
+    started = time.monotonic()
     for i in range(300):
         window.bus.emit(Event(Level.ERROR, f"Not recovered: file {i}", code="LB-402"))
+    burst = time.monotonic() - started              # the events are handled as they are sent
     _pump(app, 1.0)
     assert window.problems_model.rowCount() - before == 300
-    assert 1 <= len(toasts) <= 4, toasts
+    # At most one pop-up per gap while the burst lasts (a slow machine takes longer, so it shows a
+    # few more), then one summary: never one per problem.
+    assert 1 <= len(toasts) <= 2 + int(burst / 0.3), (burst, toasts)
     assert toasts[0][:3] == ("error", "File could not be recovered", "Not recovered: file 0")
     # On a slow machine the burst can outlast the gap, so another problem gets its own pop-up;
     # either way the summary counts exactly the ones that didn't.
